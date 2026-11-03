@@ -11,12 +11,10 @@ permissions:
 
 jobs:
   run-bot:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,12 +37,8 @@ jobs:
       - name: Run Footballi Uploader
         run: python footballi_uploader.py
 
-      - name: Save updated match history
-        run: |
-          git config user.name "Footballi Cloud Bot"
-          git config user.email "bot@footballi.net"
-          git fetch origin main
-          git reset --soft origin/main
-          git add uploaded_matches.json
-          git commit -m "Auto-update uploaded videos list" || echo "No changes to commit"
-          git push origin main
+      - name: Auto-commit updated history
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update uploaded videos list"
+          file_pattern: "uploaded_matches.json"
