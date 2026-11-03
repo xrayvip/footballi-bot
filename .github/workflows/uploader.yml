@@ -2,16 +2,15 @@ name: Footballi Auto Uploader
 
 on:
   schedule:
-    # Runs automatically every 30 minutes, 24/7
     - cron: '*/10 * * * *'
-  workflow_dispatch: # Lets you also trigger a run manually with 1 click
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   run-bot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,6 +19,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install libraries
         run: |
@@ -36,7 +36,7 @@ jobs:
       - name: Run Footballi Uploader
         run: python footballi_uploader.py
 
-      - name: Save updated match history & refreshed token
+      - name: Save updated match history
         run: |
           git config user.name "Footballi Cloud Bot"
           git config user.email "bot@footballi.net"
