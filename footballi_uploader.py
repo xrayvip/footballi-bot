@@ -25,7 +25,7 @@ BLOCKED_KEYWORDS = [
     'میلان', 'اینتر', 'یوونتوس', 'رم', 'ناپولی', 'دورتموند', 'لورکوزن',
     'الهلال', 'النصر', 'الاتحاد', 'الاهلی', 'شباب الاهلی', 'الغرافه', 'السد', 'العین',
     'فاینورد', 'ویارئال', 'استون ویلا', 'شاختار', 'اسپورتینگ', 'نیوکاسل', 'اورتون',
-    'برونو', 'رافینیا', 'امباپه', 'هالند', 'صلاح', 'وینسیوس', 'بلینگهام'
+    'گلیمت', 'لیل', 'برونو', 'رافینیا', 'امباپه', 'هالند', 'صلاح', 'وینسیوس', 'بلینگهام'
 ]
 
 PLAYLIST_CACHE = {}
@@ -38,6 +38,9 @@ def get_youtube_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            # If running in cloud CI, fail cleanly instead of hanging on a browser prompt
+            if os.environ.get('CI'):
+                raise RuntimeError("Invalid or expired token in cloud runner. Please refresh token.json.")
             flow = InstalledAppFlow.from_client_secrets_file('client_secrets.json', SCOPES)
             creds = flow.run_local_server(port=0)
         with open('token.json', 'w') as token:
@@ -95,6 +98,7 @@ def get_or_create_playlist(youtube, playlist_title):
             PLAYLIST_CACHE[playlist_title] = playlist_id
             return playlist_id
 
+    # Create playlist if not found
     create_request = youtube.playlists().insert(
         part='snippet,status',
         body={
@@ -109,25 +113,33 @@ def get_or_create_playlist(youtube, playlist_title):
     playlist_id = res['id']
     PLAYLIST_CACHE[playlist_title] = playlist_id
     print(f"Created new playlist: '{playlist_title}'")
+    
+    # Give YouTube's servers 2 seconds to replicate the new playlist globally
+    time.sleep(2)
     return playlist_id
 
 def add_to_playlist(youtube, video_id, playlist_id):
-    try:
-        youtube.playlistItems().insert(
-            part='snippet',
-            body={
-                'snippet': {
-                    'playlistId': playlist_id,
-                    'resourceId': {
-                        'kind': 'youtube#video',
-                        'videoId': video_id
+    for attempt in range(2):
+        try:
+            youtube.playlistItems().insert(
+                part='snippet',
+                body={
+                    'snippet': {
+                        'playlistId': playlist_id,
+                        'resourceId': {
+                            'kind': 'youtube#video',
+                            'videoId': video_id
+                        }
                     }
                 }
-            }
-        ).execute()
-        print("Added to playlist successfully.")
-    except Exception as e:
-        print(f"Note: Could not add to playlist ({e})")
+            ).execute()
+            print("Added to playlist successfully.")
+            return
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(3)
+            else:
+                print(f"Note: Could not add to playlist ({e})")
 
 def scrape_all_videos():
     url = "https://footballi.net/video"
