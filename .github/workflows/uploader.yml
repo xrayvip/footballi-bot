@@ -1,0 +1,45 @@
+name: Footballi Auto Uploader
+
+on:
+  schedule:
+    # Runs automatically every 30 minutes, 24/7
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Lets you also trigger a run manually with 1 click
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install libraries
+        run: |
+          pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests
+
+      - name: Load Google Credentials
+        env:
+          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+        run: |
+          echo "$CLIENT_SECRETS" > client_secrets.json
+          echo "$YOUTUBE_TOKEN" > token.json
+
+      - name: Run Footballi Uploader
+        run: python footballi_uploader.py
+
+      - name: Save updated match history & refreshed token
+        run: |
+          git config user.name "Footballi Cloud Bot"
+          git config user.email "bot@footballi.net"
+          git add uploaded_matches.json
+          git commit -m "Auto-update uploaded videos list" || echo "No new videos uploaded"
+          git push
