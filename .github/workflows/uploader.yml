@@ -43,6 +43,8 @@ jobs:
         run: |
           git config user.name "Footballi Cloud Bot"
           git config user.email "bot@footballi.net"
-          git pull --rebase origin main
+          git fetch origin main
+          git reset --soft origin/main
           git add uploaded_matches.json
-          git diff --staged --quiet || (git commit -m "Auto-update uploaded videos list" && git push origin main)
+          git commit -m "Auto-update uploaded videos list" || echo "No changes to commit"
+          git push origin main
