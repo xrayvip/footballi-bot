@@ -2,8 +2,9 @@ name: Footballi Auto Uploader
 
 on:
   schedule:
+    # Runs automatically every 10 minutes, 24/7
     - cron: '*/10 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual 1-click test runs
 
 permissions:
   contents: write
@@ -42,4 +43,5 @@ jobs:
           git config user.email "bot@footballi.net"
           git add uploaded_matches.json
           git commit -m "Auto-update uploaded videos list" || echo "No new videos uploaded"
-          git push
+          git pull --rebase origin main
+          git push origin main
