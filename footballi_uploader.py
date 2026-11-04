@@ -13,9 +13,22 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ['https://www.googleapis.com/auth/youtube']
 HISTORY_FILE = 'uploaded_matches.json'
 DEFAULT_PRIVACY = 'public'
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 PLAYLIST_CACHE = {}
+ACTIVE_GEMINI_MODEL = None
+
+# Fallback safety list in case Gemini API is unreachable
+FALLBACK_BLOCKED = [
+    'لیگ نخبگان', 'لیگ قهرمانان آسیا', 'لیگ قهرمانان اروپا', 'چمپیونزلیگ',
+    'لیگ برتر انگلیس', 'لالیگا', 'سری آ', 'بوندسلیگا', 'لیگ ۱ فرانسه',
+    'رئال مادرید', 'بارسلونا', 'بایرن مونیخ', 'پاری سن ژرمن', 'منچسترسیتی',
+    'منچستریونایتد', 'یونایتد', 'لیورپول', 'آرسنال', 'چلسی', 'تاتنهام', 'اتلتیکو مادرید',
+    'میلان', 'اینتر', 'یوونتوس', 'رم', 'ناپولی', 'پورتو', 'دورتموند', 'لورکوزن',
+    'الهلال', 'النصر', 'الاتحاد', 'الاهلی', 'شباب الاهلی', 'الغرافه', 'السد', 'العین',
+    'فاینورد', 'ویارئال', 'استون ویلا', 'شاختار', 'اسپورتینگ', 'نیوکاسل', 'اورتون',
+    'گلیمت', 'لیل', 'آاک آتن', 'کونیا', 'لایمر', 'اسپانیا'
+]
 
 def get_youtube_service():
     creds = None
@@ -49,40 +62,93 @@ def clean_title(raw_text):
     cleaned = re.sub(r'comment\s*[\d,]*', '', cleaned)
     return cleaned.strip()
 
+def get_active_gemini_model():
+    """Auto-discovers the best available Gemini Flash model from the API key."""
+    global ACTIVE_GEMINI_MODEL
+    if ACTIVE_GEMINI_MODEL:
+        return ACTIVE_GEMINI_MODEL
+
+    if not GEMINI_API_KEY:
+        return None
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            models = res.json().get('models', [])
+            # Prefer gemini-2.0-flash or any flash model that supports generateContent
+            for preferred in ['models/gemini-2.0-flash', 'models/gemini-2.5-flash', 'models/gemini-flash-latest']:
+                for m in models:
+                    if m.get('name') == preferred and 'generateContent' in m.get('supportedGenerationMethods', []):
+                        ACTIVE_GEMINI_MODEL = m['name']
+                        print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
+                        return ACTIVE_GEMINI_MODEL
+            # Otherwise pick first available flash model
+            for m in models:
+                if 'flash' in m.get('name', '') and 'generateContent' in m.get('supportedGenerationMethods', []):
+                    ACTIVE_GEMINI_MODEL = m['name']
+                    print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
+                    return ACTIVE_GEMINI_MODEL
+        else:
+            print(f"Model list returned {res.status_code}: {res.text[:150]}")
+    except Exception as e:
+        print(f"Could not list Gemini models ({e})")
+
+    ACTIVE_GEMINI_MODEL = "models/gemini-2.0-flash"
+    return ACTIVE_GEMINI_MODEL
+
+def fallback_evaluate(title):
+    """Smart rule-based evaluation if AI API is unavailable."""
+    t_lower = title.lower()
+    for b in FALLBACK_BLOCKED:
+        if b in t_lower:
+            return False, f"Contains blocked foreign keyword '{b}'", "ویدیوهای اختصاصی فوتبالی", title
+
+    if 'خلاصه بازی' in title:
+        cat = 'خلاصه بازی‌ها'
+    elif any(w in title for w in ['مصاحبه', 'صحبت', 'نشست', 'کنفرانس', 'گفتگو']):
+        cat = 'مصاحبه‌ها و نشست‌های خبری'
+    elif any(w in title for w in ['ویدیو کست', 'کارشناسی', 'تحلیل', 'برنامه', 'چطور', 'بررسی']):
+        cat = 'برنامه‌ها و ویدیوکست‌ها'
+    elif any(w in title for w in ['تمرینات', 'حواشی', 'چالش', 'هواداران', 'درگیری']):
+        cat = 'حواشی و تمرینات تیم‌ها'
+    elif 'گل' in title:
+        cat = 'گل‌های فوتبال ایران'
+    else:
+        cat = 'ویدیوهای اختصاصی فوتبالی'
+
+    return True, "Approved by local domestic rules", cat, title
+
 def ai_evaluate_video(title, page_url):
     """Uses Google Gemini AI to evaluate copyright safety, playlist category, and title."""
-    if not GEMINI_API_KEY:
-        print("Warning: GEMINI_API_KEY not set. Falling back to default.")
-        return False, "No AI key provided", "ویدیوهای اختصاصی فوتبالی", title
+    model_name = get_active_gemini_model()
+    if not model_name:
+        return fallback_evaluate(title)
 
     prompt = f"""
-You are an expert YouTube Copyright & Content ID compliance officer for Footballi (فوتبالی), Iran's premier sports media network.
-Analyze this video item from footballi.net:
+You are a YouTube Content ID compliance officer for Footballi (فوتبالی), an Iranian sports network.
+Analyze this video:
 Title: "{title}"
 URL: "{page_url}"
 
-Evaluate whether uploading this video to YouTube will trigger automated YouTube Content ID blocks from satellite broadcasters.
-
-STRICT COPYRIGHT RULES:
+STRICT RULES:
 1. REJECT (is_safe = false):
-   - Match summaries, goals, or broadcast footage from European competitions (UEFA Champions League, Europa League, Conference League).
-   - Match footage from foreign leagues (Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
-   - Match footage from Asian international tournaments (AFC Champions League Elite, AFC Champions League 2).
-   - Any foreign club match broadcast footage (e.g., Bodø/Glimt, Lille, Al Hilal, Sporting, Shakhtar, etc.).
+   - Any European club match, goal, training, or animation (e.g., Real Madrid, Barcelona, Man United, Roma, Napoli, Porto, Aston Villa, Bayern, Atletico, etc.) or UEFA Champions League / foreign league content.
+   - Any AFC Champions League Elite / foreign Asian club match.
 
 2. APPROVE (is_safe = true):
-   - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر ایران), League 1 (لیگ آزادگان), Hazfi Cup (جام حذفی), Women's Football League (لیگ فوتبال بانوان).
-   - Original non-match media: Player/coach interviews (مصاحبه، صحبت ها), press conferences (نشست خبری), studio analysis / shows / video casts (ویدیوکست، برنامه، کارشناسی داوری), training sessions (تمرینات), and fan reactions/events (حواشی، درگیری).
+   - Domestic Iranian football/futsal (لیگ برتر ایران, لیگ آزادگان, جام حذفی, تیم ملی ایران, فوتسال ایران, تراکتور, پرسپولیس, استقلال, سپاهان, گل گهر).
+   - Tactical analysis of Iranian teams, player interviews, press conferences, studio shows.
 
-Output ONLY a raw JSON object with no markdown formatting:
+Return ONLY valid JSON:
 {{
   "is_safe": true or false,
-  "reason": "Short explanation in English",
+  "reason": "Short reason in English",
   "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-  "clean_title": "Clean, engaging Persian title for YouTube"
+  "clean_title": "Clean Persian title"
 }}
 """
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
@@ -96,11 +162,11 @@ Output ONLY a raw JSON object with no markdown formatting:
             data = json.loads(raw_text)
             return data.get('is_safe', False), data.get('reason', ''), data.get('category', 'ویدیوهای اختصاصی فوتبالی'), data.get('clean_title', title)
         else:
-            print(f"Gemini API returned status {res.status_code}")
+            print(f"Gemini API status {res.status_code}: {res.text[:120]} -> Using smart fallback")
+            return fallback_evaluate(title)
     except Exception as e:
-        print(f"AI evaluation error ({e})")
-
-    return False, "AI check failed", "ویدیوهای اختصاصی فوتبالی", title
+        print(f"AI evaluation error ({e}) -> Using smart fallback")
+        return fallback_evaluate(title)
 
 def get_or_create_playlist(youtube, playlist_title):
     if playlist_title in PLAYLIST_CACHE:
@@ -273,12 +339,12 @@ def process_pipeline():
         is_safe, reason, category, clean_title_text = ai_evaluate_video(v['title'], v['page_url'])
 
         if not is_safe:
-            print(f"AI REJECTED: {reason}")
+            print(f"REJECTED: {reason}")
             history.append(v['id'])
             save_history(history)
             continue
 
-        print(f"AI APPROVED: {reason}")
+        print(f"APPROVED: {reason}")
         print(f"Category: '{category}' | Clean Title: '{clean_title_text}'")
 
         mp4_url, thumb_url, _ = extract_video_details(v['page_url'])
