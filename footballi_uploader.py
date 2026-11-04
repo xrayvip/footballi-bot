@@ -16,7 +16,7 @@ DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 PLAYLIST_CACHE = {}
-ACTIVE_GEMINI_MODEL = None
+ACTIVE_GEMINI_MODEL = "models/gemini-2.0-flash"
 
 def get_youtube_service():
     creds = None
@@ -51,44 +51,16 @@ def clean_title(raw_text):
     return cleaned.strip()
 
 def get_active_gemini_model():
-    global ACTIVE_GEMINI_MODEL
-    if ACTIVE_GEMINI_MODEL:
-        return ACTIVE_GEMINI_MODEL
-
-    if not GEMINI_API_KEY:
-        return None
-
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            models = res.json().get('models', [])
-            for preferred in ['models/gemini-2.5-flash', 'models/gemini-2.0-flash', 'models/gemini-flash-latest']:
-                for m in models:
-                    if m.get('name') == preferred and 'generateContent' in m.get('supportedGenerationMethods', []):
-                        ACTIVE_GEMINI_MODEL = m['name']
-                        print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
-                        return ACTIVE_GEMINI_MODEL
-            for m in models:
-                if 'flash' in m.get('name', '') and 'generateContent' in m.get('supportedGenerationMethods', []):
-                    ACTIVE_GEMINI_MODEL = m['name']
-                    print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
-                    return ACTIVE_GEMINI_MODEL
-    except Exception as e:
-        print(f"Could not list Gemini models: {e}")
-
-    ACTIVE_GEMINI_MODEL = "models/gemini-2.5-flash"
     return ACTIVE_GEMINI_MODEL
 
 def ai_evaluate_video(title, page_url, page_tags_text=""):
     """
     Evaluates copyright compliance strictly using YouTube Content ID rules.
-    Operates on a strict ZERO-TRUST / WHITELIST-ONLY basis.
+    Operates on a strict ZERO-TRUST / WHITELIST-ONLY basis via Gemini 2.0 Flash.
     """
-    model_name = get_active_gemini_model()
-    if not model_name or not GEMINI_API_KEY:
+    if not GEMINI_API_KEY:
         print("AI service unavailable -> Rejecting by default for channel safety.")
-        return False, "AI Key missing or unavailable", "ویدیوهای اختصاصی فوتبالی", title, False
+        return False, "AI Key missing", "ویدیوهای اختصاصی فوتبالی", title, False
 
     prompt = f"""
 You are the Chief YouTube Copyright Compliance Auditor for Footballi (فوتبالی).
@@ -104,7 +76,7 @@ YOUTUBE CONTENT ID COMPLIANCE POLICIES:
 1. ABSOLUTE REJECTION (is_safe = false) - MUST BLOCK:
    - ANY match broadcast footage, goals, highlights, or 3D animations from European competitions or leagues (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
    - ANY match broadcast footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN CLUB (Esteghlal, Persepolis, Tractor, Sepahan, Gol Gohar) IS PLAYING! The AFC owns international broadcast rights and blocks them globally.
-   - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips.
+   - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips (Real Madrid, Man City, Arsenal, Leipzig, etc.).
    - Any video using foreign satellite commentary audio (beIN, Sky, DAZN, etc.).
 
 2. STRICT APPROVAL (is_safe = true) - ONLY ALLOW:
@@ -126,7 +98,7 @@ Output ONLY a raw, valid JSON object (no markdown formatting):
   "is_short": true or false
 }}
 """
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/{ACTIVE_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
@@ -146,7 +118,7 @@ Output ONLY a raw, valid JSON object (no markdown formatting):
                 data.get('is_short', True)
             )
         else:
-            print(f"Gemini API returned status {res.status_code} -> Defaulting to REJECT")
+            print(f"Gemini API returned status {res.status_code} ({res.text[:80]}) -> Defaulting to REJECT")
     except Exception as e:
         print(f"AI evaluation exception: {e} -> Defaulting to REJECT")
 
