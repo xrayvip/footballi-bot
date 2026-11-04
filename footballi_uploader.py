@@ -18,7 +18,6 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 PLAYLIST_CACHE = {}
 ACTIVE_GEMINI_MODEL = None
 
-# Fallback safety list in case Gemini API is unreachable
 FALLBACK_BLOCKED = [
     'لیگ نخبگان', 'لیگ قهرمانان آسیا', 'لیگ قهرمانان اروپا', 'چمپیونزلیگ',
     'لیگ برتر انگلیس', 'لالیگا', 'سری آ', 'بوندسلیگا', 'لیگ ۱ فرانسه',
@@ -63,7 +62,6 @@ def clean_title(raw_text):
     return cleaned.strip()
 
 def get_active_gemini_model():
-    """Auto-discovers the best available Gemini Flash model from the API key."""
     global ACTIVE_GEMINI_MODEL
     if ACTIVE_GEMINI_MODEL:
         return ACTIVE_GEMINI_MODEL
@@ -76,21 +74,17 @@ def get_active_gemini_model():
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             models = res.json().get('models', [])
-            # Prefer gemini-2.0-flash or any flash model that supports generateContent
             for preferred in ['models/gemini-2.0-flash', 'models/gemini-2.5-flash', 'models/gemini-flash-latest']:
                 for m in models:
                     if m.get('name') == preferred and 'generateContent' in m.get('supportedGenerationMethods', []):
                         ACTIVE_GEMINI_MODEL = m['name']
                         print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
                         return ACTIVE_GEMINI_MODEL
-            # Otherwise pick first available flash model
             for m in models:
                 if 'flash' in m.get('name', '') and 'generateContent' in m.get('supportedGenerationMethods', []):
                     ACTIVE_GEMINI_MODEL = m['name']
                     print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
                     return ACTIVE_GEMINI_MODEL
-        else:
-            print(f"Model list returned {res.status_code}: {res.text[:150]}")
     except Exception as e:
         print(f"Could not list Gemini models ({e})")
 
@@ -98,7 +92,6 @@ def get_active_gemini_model():
     return ACTIVE_GEMINI_MODEL
 
 def fallback_evaluate(title):
-    """Smart rule-based evaluation if AI API is unavailable."""
     t_lower = title.lower()
     for b in FALLBACK_BLOCKED:
         if b in t_lower:
@@ -120,7 +113,6 @@ def fallback_evaluate(title):
     return True, "Approved by local domestic rules", cat, title
 
 def ai_evaluate_video(title, page_url):
-    """Uses Google Gemini AI to evaluate copyright safety, playlist category, and title."""
     model_name = get_active_gemini_model()
     if not model_name:
         return fallback_evaluate(title)
@@ -162,10 +154,8 @@ Return ONLY valid JSON:
             data = json.loads(raw_text)
             return data.get('is_safe', False), data.get('reason', ''), data.get('category', 'ویدیوهای اختصاصی فوتبالی'), data.get('clean_title', title)
         else:
-            print(f"Gemini API status {res.status_code}: {res.text[:120]} -> Using smart fallback")
             return fallback_evaluate(title)
-    except Exception as e:
-        print(f"AI evaluation error ({e}) -> Using smart fallback")
+    except Exception:
         return fallback_evaluate(title)
 
 def get_or_create_playlist(youtube, playlist_title):
@@ -382,26 +372,36 @@ def process_pipeline():
             f"#فوتبالی #فوتبال_ایران #{category.replace(' ', '_')}"
         )
 
-        video_id = upload_to_youtube(
-            youtube, 
-            video_filename, 
-            clean_title_text, 
-            description, 
-            thumb_filename if os.path.exists(thumb_filename) else None
-        )
+        try:
+            video_id = upload_to_youtube(
+                youtube, 
+                video_filename, 
+                clean_title_text, 
+                description, 
+                thumb_filename if os.path.exists(thumb_filename) else None
+            )
 
-        playlist_id = get_or_create_playlist(youtube, category)
-        add_to_playlist(youtube, video_id, playlist_id)
+            playlist_id = get_or_create_playlist(youtube, category)
+            add_to_playlist(youtube, video_id, playlist_id)
 
-        if os.path.exists(video_filename):
-            os.remove(video_filename)
-        if os.path.exists(thumb_filename):
-            os.remove(thumb_filename)
+            history.append(v['id'])
+            save_history(history)
+            print("Done. Pausing 15 seconds before next video...")
+            time.sleep(15)
 
-        history.append(v['id'])
-        save_history(history)
-        print("Done. Pausing 15 seconds before next video...")
-        time.sleep(15)
+        except Exception as e:
+            err_msg = str(e)
+            if 'uploadLimitExceeded' in err_msg or 'quotaExceeded' in err_msg:
+                print("\n[LIMIT HIT] YouTube 24-hour upload quota reached.")
+                print("Stopping run cleanly. Your rejected history is saved, and new uploads will resume on the next run.")
+                break
+            else:
+                print(f"Upload error ({e}), skipping.")
+        finally:
+            if os.path.exists(video_filename):
+                os.remove(video_filename)
+            if os.path.exists(thumb_filename):
+                os.remove(thumb_filename)
 
 if __name__ == '__main__':
     process_pipeline()
