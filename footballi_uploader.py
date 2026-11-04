@@ -2,6 +2,7 @@ import os
 import json
 import time
 import re
+from difflib import SequenceMatcher
 import requests
 from bs4 import BeautifulSoup
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -36,13 +37,78 @@ def get_youtube_service():
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
     return []
 
 def save_history(history):
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
+
+def normalize_persian(text):
+    """Normalizes Persian text for accurate duplicate comparison across Website & Telegram."""
+    if not text:
+        return ""
+    text = text.replace('ی', 'ی').replace('ي', 'ی').replace('ک', 'ک').replace('ك', 'ک')
+    text = text.replace('\u200c', ' ')
+    text = re.sub(r'#\S+', '', text)  # Remove hashtags like #Shorts
+    text = re.sub(r'[^\w\s]', ' ', text)  # Remove emojis and punctuation
+    text = re.sub(r'\s+', ' ', text).strip().lower()
+    return text
+
+def is_duplicate_title(candidate_title, existing_titles):
+    """Checks if a video title already exists on the YouTube channel or history."""
+    norm_cand = normalize_persian(candidate_title)
+    if not norm_cand or len(norm_cand) < 5:
+        return False
+
+    for existing in existing_titles:
+        norm_ex = normalize_persian(existing)
+        if not norm_ex:
+            continue
+        # Direct substring match
+        if norm_cand in norm_ex or norm_ex in norm_cand:
+            if min(len(norm_cand), len(norm_ex)) > 15:
+                return True
+        # Fuzzy similarity match (>= 78% identical)
+        similarity = SequenceMatcher(None, norm_cand, norm_ex).ratio()
+        if similarity >= 0.78:
+            return True
+    return False
+
+def get_existing_youtube_titles(youtube):
+    """Fetches the last 100 uploaded videos directly from the YouTube channel."""
+    titles = []
+    try:
+        ch_res = youtube.channels().list(part='contentDetails', mine=True).execute()
+        items = ch_res.get('items', [])
+        if not items:
+            return titles
+        uploads_playlist_id = items[0]['contentDetails']['relatedPlaylists']['uploads']
+
+        next_page = None
+        for _ in range(2):  # Up to 100 recent videos
+            pl_res = youtube.playlistItems().list(
+                part='snippet',
+                playlistId=uploads_playlist_id,
+                maxResults=50,
+                pageToken=next_page
+            ).execute()
+            for item in pl_res.get('items', []):
+                t = item['snippet']['title']
+                titles.append(t)
+            next_page = pl_res.get('nextPageToken')
+            if not next_page:
+                break
+        print(f"Loaded {len(titles)} existing videos from YouTube channel for duplicate protection.")
+    except Exception as e:
+        print("Note: Could not fetch existing YouTube videos list:", str(e))
+    return titles
 
 def clean_title(raw_text):
     cleaned = re.sub(r'play_arrow\d*:\d*', '', raw_text)
@@ -51,7 +117,6 @@ def clean_title(raw_text):
     return cleaned.strip()
 
 def discover_working_models():
-    """Finds available Gemini 3+ Flash models to rotate if one is busy (503)."""
     global WORKING_MODELS
     if WORKING_MODELS:
         return WORKING_MODELS
@@ -80,17 +145,13 @@ def discover_working_models():
     WORKING_MODELS = candidates
     return WORKING_MODELS
 
-def ai_batch_evaluate(items_to_audit):
-    """
-    Evaluates ALL videos in a SINGLE API request to avoid 429 Rate Limits!
-    Automatically retries across backup models if 503 High Demand occurs.
-    """
+def ai_batch_evaluate(items_to_audit, existing_yt_titles):
+    """Evaluates ALL videos in a SINGLE API request for Copyright AND Duplicates."""
     if not GEMINI_API_KEY or not items_to_audit:
         return {}
 
     models = discover_working_models()
 
-    # Build compact list of videos for the prompt
     items_payload = []
     for it in items_to_audit:
         items_payload.append({
@@ -99,23 +160,31 @@ def ai_batch_evaluate(items_to_audit):
             "context": it['context_text'][:200]
         })
 
-    prompt = f"""
-You are the Chief YouTube Copyright Compliance Auditor for Footballi (فوتبالی).
-Audit this batch of {len(items_payload)} videos for YouTube Content ID safety.
+    recent_channel_titles = existing_yt_titles[:30]
 
-INPUT VIDEOS:
+    prompt = f"""
+You are the Chief YouTube Copyright & Content Auditor for Footballi (فوتبالی).
+Audit this batch of {len(items_payload)} candidate videos.
+
+RECENTLY UPLOADED VIDEOS ALREADY ON OUR YOUTUBE CHANNEL (DO NOT DUPLICATE THESE):
+{json.dumps(recent_channel_titles, ensure_ascii=False)}
+
+CANDIDATE VIDEOS TO AUDIT:
 {json.dumps(items_payload, ensure_ascii=False, indent=2)}
 
-YOUTUBE CONTENT ID COMPLIANCE RULES:
+STRICT AUDIT RULES:
 
-1. REJECT (is_safe = false):
-   - ANY match footage, goals, highlights, or 3D animations from European leagues or UEFA (Champions League, Europa League, Conference League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
+1. REJECT DUPLICATES (is_safe = false):
+   - If a candidate video covers the exact same interview, goal, or clip already listed in RECENTLY UPLOADED VIDEOS (or duplicates another item in this same batch), set "is_safe": false with reason "Duplicate content already uploaded".
+
+2. REJECT COPYRIGHT RISKS (is_safe = false):
+   - ANY match footage, goals, highlights, or 3D animations from European leagues or UEFA (Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
    - ANY match footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN TEAM IS PLAYING!
-   - ANY foreign club matches, foreign goals, foreign player awards, or foreign stadium arrivals (e.g., Real Madrid, Man City, Arsenal, Leipzig, Napoli, Brugge, PSV, Dortmund, Betis, Como, Lens, Viking, Sabah, etc.).
+   - ANY foreign club matches, foreign goals, or foreign stadium clips.
 
-2. APPROVE (is_safe = true):
+3. APPROVE SAFE ORIGINAL CONTENT (is_safe = true):
    - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر ایران), Hazfi Cup (جام حذفی), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal.
-   - Original Non-Broadcast Media: In-person interviews with Iranian players/coaches/experts (e.g. مصاحبه علی سامره درباره تیم ملی, نشست خبری), studio shows and tactical talks (ویدیوکست فوتبالی، کارشناسی داوری), field-side training of Iranian teams, domestic fan reactions.
+   - Original Non-Broadcast Media: In-person interviews with Iranian players/coaches/experts (مصاحبه، نشست خبری), studio shows and tactical talks (ویدیوکست فوتبالی، کارشناسی داوری), field-side training of Iranian teams, domestic fan reactions.
 
 Output ONLY a raw JSON array of objects, one for each input "id":
 [
@@ -154,7 +223,6 @@ Output ONLY a raw JSON array of objects, one for each input "id":
                     print(f"Model {model_name} busy (HTTP {res.status_code}), retrying in 4s...")
                     time.sleep(4)
                 else:
-                    # 404 or unsupported model, move to next candidate model immediately
                     break
             except Exception as e:
                 print(f"Batch call exception on {model_name}: {e}")
@@ -374,19 +442,27 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
 def process_pipeline():
     youtube = get_youtube_service()
     history = load_history()
+    existing_yt_titles = get_existing_youtube_titles(youtube)
 
     website_videos = scrape_website_videos()
     telegram_shorts = scrape_telegram_shorts()
 
     all_items = website_videos + telegram_shorts
-    new_items = [it for it in all_items if it['id'] not in history]
 
-    print(f"Found {len(all_items)} total videos ({len(new_items)} new to evaluate)")
-    if not new_items:
+    # Filter out IDs already in history (checking both raw_id and prefixed id)
+    candidates = []
+    for it in all_items:
+        if it['id'] in history or it['raw_id'] in history:
+            continue
+        candidates.append(it)
+
+    print(f"Found {len(all_items)} total videos ({len(candidates)} not in local ID history)")
+    if not candidates:
         return
 
-    # Enrich new items with page metadata before batch AI call
-    for item in new_items:
+    # Enrich candidates and check against existing YouTube channel titles
+    new_items = []
+    for item in candidates:
         if item['source'] == 'telegram':
             item['mp4_url'] = item.get('direct_mp4')
             item['thumb_url'] = None
@@ -399,10 +475,22 @@ def process_pipeline():
             item['context_text'] = context_text
             item['eval_title'] = clean_page_title if clean_page_title else item['title']
 
-    # Audit all new items in ONE single AI request
-    audit_results = ai_batch_evaluate(new_items)
+        # Check if this title is already live on YouTube or duplicated in the current batch
+        if is_duplicate_title(item['eval_title'], existing_yt_titles):
+            print(f"[SKIP DUPLICATE] Already on YouTube channel: {item['eval_title']}")
+            history.append(item['id'])
+            save_history(history)
+            continue
+
+        new_items.append(item)
+
+    if not new_items:
+        print("All candidate videos already exist on the channel.")
+        return
+
+    # Audit remaining genuinely new items in ONE single AI request
+    audit_results = ai_batch_evaluate(new_items, existing_yt_titles)
     if audit_results is None:
-        # AI temporarily unreachable; do NOT mark as rejected so next run evaluates them
         return
 
     for item in new_items:
@@ -419,6 +507,13 @@ def process_pipeline():
         print(f"\n[AUDIT] [{item['source'].upper()}] {item['eval_title']}")
         if not is_safe:
             print(f"-> REJECTED BY AI: {reason}")
+            history.append(item['id'])
+            save_history(history)
+            continue
+
+        # Double-check the AI's cleaned title against existing YouTube titles
+        if is_duplicate_title(clean_title_text, existing_yt_titles):
+            print(f"-> SKIP DUPLICATE: '{clean_title_text}' already uploaded in this session.")
             history.append(item['id'])
             save_history(history)
             continue
@@ -483,8 +578,13 @@ def process_pipeline():
                 shorts_playlist_id = get_or_create_playlist(youtube, 'ویدیوهای کوتاه (Shorts)')
                 add_to_playlist(youtube, video_id, shorts_playlist_id)
 
+            # Record both in history AND live memory so Telegram won't re-upload a Website video
             history.append(item['id'])
+            history.append(item['raw_id'])
             save_history(history)
+            existing_yt_titles.append(clean_title_text)
+            existing_yt_titles.append(item['eval_title'])
+
             print("Done. Pausing 15 seconds before next video...")
             time.sleep(15)
 
