@@ -10,23 +10,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# YouTube Full Access Scope (Upload Videos & Manage Playlists)
 SCOPES = ['https://www.googleapis.com/auth/youtube']
 HISTORY_FILE = 'uploaded_matches.json'
 DEFAULT_PRIVACY = 'public'
-
-# Foreign clubs, players, and international leagues that trigger YouTube Content ID blocks
-BLOCKED_KEYWORDS = [
-    'لیگ نخبگان', 'لیگ قهرمانان آسیا', 'لیگ قهرمانان اروپا', 'چمپیونزلیگ',
-    'لیگ برتر انگلیس', 'لالیگا', 'سری آ', 'بوندسلیگا', 'لیگ ۱ فرانسه',
-    'جام حذفی اسپانیا', 'جام حذفی انگلیس', 'جام اتحادیه',
-    'رئال مادرید', 'بارسلونا', 'بایرن مونیخ', 'پاری سن ژرمن', 'منچسترسیتی',
-    'منچستریونایتد', 'یونایتد', 'لیورپول', 'آرسنال', 'چلسی', 'تاتنهام', 'اتلتیکو مادرید',
-    'میلان', 'اینتر', 'یوونتوس', 'رم', 'ناپولی', 'دورتموند', 'لورکوزن',
-    'الهلال', 'النصر', 'الاتحاد', 'الاهلی', 'شباب الاهلی', 'الغرافه', 'السد', 'العین',
-    'فاینورد', 'ویارئال', 'استون ویلا', 'شاختار', 'اسپورتینگ', 'نیوکاسل', 'اورتون',
-    'گلیمت', 'لیل', 'برونو', 'رافینیا', 'امباپه', 'هالند', 'صلاح', 'وینسیوس', 'بلینگهام'
-]
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
 PLAYLIST_CACHE = {}
 
@@ -38,7 +25,6 @@ def get_youtube_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # If running in cloud CI, fail cleanly instead of hanging on a browser prompt
             if os.environ.get('CI'):
                 raise RuntimeError("Invalid or expired token in cloud runner. Please refresh token.json.")
             flow = InstalledAppFlow.from_client_secrets_file('client_secrets.json', SCOPES)
@@ -63,27 +49,58 @@ def clean_title(raw_text):
     cleaned = re.sub(r'comment\s*[\d,]*', '', cleaned)
     return cleaned.strip()
 
-def categorize_video(title):
-    if 'خلاصه بازی' in title:
-        return 'خلاصه بازی‌ها'
-    elif any(w in title for w in ['مصاحبه', 'صحبت های', 'صحبت‌های', 'نشست خبری', 'کنفرانس', 'گفتگو', 'خطیر', 'میثاقی']):
-        return 'مصاحبه‌ها و نشست‌های خبری'
-    elif any(w in title for w in ['ویدیو کست', 'کارشناسی', 'تحلیل', 'برنامه', 'گلایه', 'بررسی']):
-        return 'برنامه‌ها و ویدیوکست‌ها'
-    elif any(w in title for w in ['تمرینات', 'حواشی', 'چالش', 'هواداران', 'جالب', 'اتفاقات', 'درگیری']):
-        return 'حواشی و تمرینات تیم‌ها'
-    elif 'گل' in title:
-        return 'گل‌های فوتبال ایران'
-    else:
-        return 'ویدیوهای اختصاصی فوتبالی'
+def ai_evaluate_video(title, page_url):
+    """Uses Google Gemini AI to evaluate copyright safety, playlist category, and title."""
+    if not GEMINI_API_KEY:
+        print("Warning: GEMINI_API_KEY not set. Falling back to default.")
+        return False, "No AI key provided", "ویدیوهای اختصاصی فوتبالی", title
 
-def is_safe_content(title):
-    """Checks strictly the video title to avoid site-wide footer links."""
-    title_lower = title.lower()
-    for blocked in BLOCKED_KEYWORDS:
-        if blocked in title_lower:
-            return False, blocked
-    return True, None
+    prompt = f"""
+You are an expert YouTube Copyright & Content ID compliance officer for Footballi (فوتبالی), Iran's premier sports media network.
+Analyze this video item from footballi.net:
+Title: "{title}"
+URL: "{page_url}"
+
+Evaluate whether uploading this video to YouTube will trigger automated YouTube Content ID blocks from satellite broadcasters.
+
+STRICT COPYRIGHT RULES:
+1. REJECT (is_safe = false):
+   - Match summaries, goals, or broadcast footage from European competitions (UEFA Champions League, Europa League, Conference League).
+   - Match footage from foreign leagues (Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
+   - Match footage from Asian international tournaments (AFC Champions League Elite, AFC Champions League 2).
+   - Any foreign club match broadcast footage (e.g., Bodø/Glimt, Lille, Al Hilal, Sporting, Shakhtar, etc.).
+
+2. APPROVE (is_safe = true):
+   - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر ایران), League 1 (لیگ آزادگان), Hazfi Cup (جام حذفی), Women's Football League (لیگ فوتبال بانوان).
+   - Original non-match media: Player/coach interviews (مصاحبه، صحبت ها), press conferences (نشست خبری), studio analysis / shows / video casts (ویدیوکست، برنامه، کارشناسی داوری), training sessions (تمرینات), and fan reactions/events (حواشی، درگیری).
+
+Output ONLY a raw JSON object with no markdown formatting:
+{{
+  "is_safe": true or false,
+  "reason": "Short explanation in English",
+  "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
+  "clean_title": "Clean, engaging Persian title for YouTube"
+}}
+"""
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
+    }
+
+    try:
+        res = requests.post(api_url, json=payload, timeout=12)
+        if res.status_code == 200:
+            result = res.json()
+            raw_text = result['candidates'][0]['content']['parts'][0]['text']
+            data = json.loads(raw_text)
+            return data.get('is_safe', False), data.get('reason', ''), data.get('category', 'ویدیوهای اختصاصی فوتبالی'), data.get('clean_title', title)
+        else:
+            print(f"Gemini API returned status {res.status_code}")
+    except Exception as e:
+        print(f"AI evaluation error ({e})")
+
+    return False, "AI check failed", "ویدیوهای اختصاصی فوتبالی", title
 
 def get_or_create_playlist(youtube, playlist_title):
     if playlist_title in PLAYLIST_CACHE:
@@ -98,7 +115,6 @@ def get_or_create_playlist(youtube, playlist_title):
             PLAYLIST_CACHE[playlist_title] = playlist_id
             return playlist_id
 
-    # Create playlist if not found
     create_request = youtube.playlists().insert(
         part='snippet,status',
         body={
@@ -113,8 +129,6 @@ def get_or_create_playlist(youtube, playlist_title):
     playlist_id = res['id']
     PLAYLIST_CACHE[playlist_title] = playlist_id
     print(f"Created new playlist: '{playlist_title}'")
-    
-    # Give YouTube's servers 2 seconds to replicate the new playlist globally
     time.sleep(2)
     return playlist_id
 
@@ -168,14 +182,12 @@ def scrape_all_videos():
                 continue
 
             full_url = href if href.startswith('http') else 'https://footballi.net' + href
-            category = categorize_video(title)
 
             if not any(v['id'] == video_id for v in videos):
                 videos.append({
                     'id': video_id,
                     'title': title,
-                    'page_url': full_url,
-                    'category': category
+                    'page_url': full_url
                 })
     return videos
 
@@ -257,23 +269,23 @@ def process_pipeline():
         if v['id'] in history:
             continue
 
-        print(f"\nEvaluating: {v['title']}")
-        mp4_url, thumb_url, clean_page_title = extract_video_details(v['page_url'])
-        final_title = clean_page_title if clean_page_title else v['title']
+        print(f"\nConsulting AI on: {v['title']}")
+        is_safe, reason, category, clean_title_text = ai_evaluate_video(v['title'], v['page_url'])
 
-        # Strict Title-Only Broadcast Rights Filter
-        is_safe, blocked_keyword = is_safe_content(final_title)
         if not is_safe:
-            print(f"SKIP: Contains '{blocked_keyword}' (International broadcast rights).")
+            print(f"AI REJECTED: {reason}")
             history.append(v['id'])
             save_history(history)
             continue
 
+        print(f"AI APPROVED: {reason}")
+        print(f"Category: '{category}' | Clean Title: '{clean_title_text}'")
+
+        mp4_url, thumb_url, _ = extract_video_details(v['page_url'])
         if not mp4_url:
-            print(f"Could not locate video stream for {final_title}, skipping.")
+            print(f"Could not locate video stream, skipping.")
             continue
 
-        print(f"SAFE: Approved for playlist '{v['category']}'.")
         video_filename = f"temp_{v['id']}.mp4"
         thumb_filename = f"thumb_{v['id']}.jpg"
 
@@ -284,7 +296,7 @@ def process_pipeline():
                     for chunk in r.iter_content(chunk_size=1024*1024):
                         f.write(chunk)
         except Exception as e:
-            print(f"Download error on {final_title} ({e}), skipping.")
+            print(f"Download error ({e}), skipping.")
             continue
 
         if thumb_url:
@@ -296,23 +308,23 @@ def process_pipeline():
                 pass
 
         description = (
-            f"{final_title}\n\n"
+            f"{clean_title_text}\n\n"
             f"برای مشاهده نتایج زنده، اخبار و ویدیوهای بیشتر به وبسایت فوتبالی مراجعه کنید:\n"
             f"https://footballi.net/\n\n"
             f"دانلود اپلیکیشن فوتبالی:\n"
             f"https://footballi.net/download\n\n"
-            f"#فوتبالی #فوتبال_ایران #{v['category'].replace(' ', '_')}"
+            f"#فوتبالی #فوتبال_ایران #{category.replace(' ', '_')}"
         )
 
         video_id = upload_to_youtube(
             youtube, 
             video_filename, 
-            final_title, 
+            clean_title_text, 
             description, 
             thumb_filename if os.path.exists(thumb_filename) else None
         )
 
-        playlist_id = get_or_create_playlist(youtube, v['category'])
+        playlist_id = get_or_create_playlist(youtube, category)
         add_to_playlist(youtube, video_id, playlist_id)
 
         if os.path.exists(video_filename):
