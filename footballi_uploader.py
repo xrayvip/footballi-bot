@@ -75,7 +75,7 @@ def get_active_gemini_model():
                     print(f"Connected to AI model: {ACTIVE_GEMINI_MODEL}")
                     return ACTIVE_GEMINI_MODEL
     except Exception as e:
-        print(f"Could not list Gemini models ({e})")
+        print(f"Could not list Gemini models: {e}")
 
     ACTIVE_GEMINI_MODEL = "models/gemini-2.5-flash"
     return ACTIVE_GEMINI_MODEL
@@ -102,8 +102,8 @@ Video Details to Audit:
 YOUTUBE CONTENT ID COMPLIANCE POLICIES:
 
 1. ABSOLUTE REJECTION (is_safe = false) - MUST BLOCK:
-   - ANY match broadcast footage, goals, highlights, or 3D animations from European leagues or UEFA (Champions League, Europa League, Conference League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
-   - ANY match broadcast footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup, etc.) - EVEN IF AN IRANIAN CLUB (Esteghlal, Persepolis, Tractor, Sepahan, Gol Gohar) IS PLAYING! The AFC owns international broadcast rights and blocks them globally.
+   - ANY match broadcast footage, goals, highlights, or 3D animations from European competitions or leagues (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
+   - ANY match broadcast footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN CLUB (Esteghlal, Persepolis, Tractor, Sepahan, Gol Gohar) IS PLAYING! The AFC owns international broadcast rights and blocks them globally.
    - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips.
    - Any video using foreign satellite commentary audio (beIN, Sky, DAZN, etc.).
 
@@ -111,18 +111,18 @@ YOUTUBE CONTENT ID COMPLIANCE POLICIES:
    - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر خلیج فارس / لیگ برتر ایران), Hazfi Cup (جام حذفی ایران), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal League (لیگ فوتبال و فوتسال بانوان).
    - Original Non-Broadcast Media: In-person player/coach interviews (مصاحبه اختصاصی), press room conferences (نشست خبری), studio shows and tactical talks (برنامه ویدیوکست، تحلیل، کارشناسی داوری), field-side training (تمرینات تیم‌های ایرانی), fan reactions and atmosphere (حواشی و هواداران).
 
-If there is ANY doubt, ambiguity, or foreign tournament involvement, you MUST default to REJECT (is_safe = false).
+If there is ANY doubt or foreign tournament involvement, you MUST default to REJECT (is_safe = false).
 
 Format Decision:
 - If duration is short (clip, goal, reaction, interview under 3 mins), set "is_short": true.
 - If it's a full domestic match summary or full studio video cast, set "is_short": false.
 
-Output ONLY a raw, valid JSON object (no markdown, no quotes around json):
+Output ONLY a raw, valid JSON object (no markdown formatting):
 {{
   "is_safe": true or false,
-  "reason": "Detailed reason in English explaining why it is safe or why it violates YouTube Content ID",
+  "reason": "Detailed reason in English",
   "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-  "clean_title": "Professional, clean Persian title for YouTube without noise",
+  "clean_title": "Professional Persian title without noise",
   "is_short": true or false
 }}
 """
@@ -148,7 +148,7 @@ Output ONLY a raw, valid JSON object (no markdown, no quotes around json):
         else:
             print(f"Gemini API returned status {res.status_code} -> Defaulting to REJECT")
     except Exception as e:
-        print(f"AI evaluation exception ({e}) -> Defaulting to REJECT")
+        print(f"AI evaluation exception: {e} -> Defaulting to REJECT")
 
     return False, "AI evaluation failed; rejected for safety", "ویدیوهای اختصاصی فوتبالی", title, False
 
@@ -203,7 +203,7 @@ def add_to_playlist(youtube, video_id, playlist_id):
             if attempt == 0:
                 time.sleep(3)
             else:
-                print(f"Note: Could not add to playlist ({e})")
+                print("Note: Could not add to playlist:", str(e))
 
 def scrape_website_videos():
     url = "https://footballi.net/video"
@@ -213,7 +213,7 @@ def scrape_website_videos():
         if res.status_code != 200:
             return []
     except Exception as e:
-        print(f"Could not load footballi.net/video ({e})")
+        print(f"Could not load footballi.net/video: {e}")
         return []
 
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -251,7 +251,7 @@ def scrape_telegram_shorts():
         if res.status_code != 200:
             return []
     except Exception as e:
-        print(f"Could not load t.me/s/FootballiApp ({e})")
+        print(f"Could not load t.me/s/FootballiApp: {e}")
         return []
 
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -292,7 +292,7 @@ def extract_website_video_details(video_page_url):
         res = requests.get(video_page_url, headers=headers, timeout=15)
         html = res.text
     except Exception as e:
-        print(f"Timeout on {video_page_url} ({e})")
+        print(f"Timeout on {video_page_url}: {e}")
         return None, None, None, ""
 
     soup = BeautifulSoup(html, 'html.parser')
@@ -313,7 +313,6 @@ def extract_website_video_details(video_page_url):
     og_title = soup.find('meta', property='og:title')
     page_title = og_title['content'] if og_title else None
 
-    # Extract tags and competition metadata from the video's article block
     tags = []
     for tag in soup.find_all('a', href=re.compile(r'/tag/|/competition/')):
         t_text = tag.text.strip()
@@ -357,7 +356,7 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
             ).execute()
             print("Thumbnail set successfully.")
         except Exception as e:
-            print(f"Note: Could not set thumbnail ({e})")
+            print("Note: Could not set thumbnail:", str(e))
 
     return video_id
 
@@ -375,7 +374,6 @@ def process_pipeline():
         if item['id'] in history:
             continue
 
-        # Extract details and page context
         thumb_url = None
         context_text = ""
         if item['source'] == 'telegram':
@@ -417,7 +415,7 @@ def process_pipeline():
                     for chunk in r.iter_content(chunk_size=1024*1024):
                         f.write(chunk)
         except Exception as e:
-            print(f"Download error ({e}), skipping.")
+            print("Download error:", str(e), "- skipping.")
             continue
 
         if thumb_url:
@@ -465,4 +463,12 @@ def process_pipeline():
                 print("Stopping run cleanly. History is saved, and new uploads will resume on next run.")
                 break
             else:
-                print(f"Upload error ({
+                print("Upload error:", str(e), "- skipping.")
+        finally:
+            if os.path.exists(video_filename):
+                os.remove(video_filename)
+            if os.path.exists(thumb_filename):
+                os.remove(thumb_filename)
+
+if __name__ == '__main__':
+    process_pipeline()
