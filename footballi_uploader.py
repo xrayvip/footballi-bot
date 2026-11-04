@@ -95,14 +95,17 @@ def fallback_evaluate(title):
     t_lower = title.lower()
     for b in FALLBACK_BLOCKED:
         if b in t_lower:
-            return False, f"Contains blocked foreign keyword '{b}'", "ویدیوهای اختصاصی فوتبالی", title
+            return False, f"Contains blocked foreign keyword '{b}'", "ویدیوهای اختصاصی فوتبالی", title, False
 
+    is_short = True
     if 'خلاصه بازی' in title:
         cat = 'خلاصه بازی‌ها'
+        is_short = False
     elif any(w in title for w in ['مصاحبه', 'صحبت', 'نشست', 'کنفرانس', 'گفتگو']):
         cat = 'مصاحبه‌ها و نشست‌های خبری'
     elif any(w in title for w in ['ویدیو کست', 'کارشناسی', 'تحلیل', 'برنامه', 'چطور', 'بررسی']):
         cat = 'برنامه‌ها و ویدیوکست‌ها'
+        is_short = False
     elif any(w in title for w in ['تمرینات', 'حواشی', 'چالش', 'هواداران', 'درگیری']):
         cat = 'حواشی و تمرینات تیم‌ها'
     elif 'گل' in title:
@@ -110,9 +113,10 @@ def fallback_evaluate(title):
     else:
         cat = 'ویدیوهای اختصاصی فوتبالی'
 
-    return True, "Approved by local domestic rules", cat, title
+    return True, "Approved by local domestic rules", cat, title, is_short
 
 def ai_evaluate_video(title, page_url):
+    """Uses Google Gemini AI to evaluate copyright safety, category, and Shorts classification."""
     model_name = get_active_gemini_model()
     if not model_name:
         return fallback_evaluate(title)
@@ -130,14 +134,19 @@ STRICT RULES:
 
 2. APPROVE (is_safe = true):
    - Domestic Iranian football/futsal (لیگ برتر ایران, لیگ آزادگان, جام حذفی, تیم ملی ایران, فوتسال ایران, تراکتور, پرسپولیس, استقلال, سپاهان, گل گهر).
-   - Tactical analysis of Iranian teams, player interviews, press conferences, studio shows.
+   - Tactical analysis of Iranian teams, player interviews, press conferences, fan reactions, training clips.
+
+3. SHORTS CLASSIFICATION:
+   - If the video is a short clip, goal, reaction, interview snippet, or training moment under 3 minutes, set "is_short": true.
+   - If it is a full match summary ("خلاصه بازی") or full studio podcast ("ویدیوکست"), set "is_short": false.
 
 Return ONLY valid JSON:
 {{
   "is_safe": true or false,
-  "reason": "Short reason in English",
+  "reason": "Short explanation in English",
   "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-  "clean_title": "Clean Persian title"
+  "clean_title": "Clean Persian title",
+  "is_short": true or false
 }}
 """
     api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -152,7 +161,13 @@ Return ONLY valid JSON:
             result = res.json()
             raw_text = result['candidates'][0]['content']['parts'][0]['text']
             data = json.loads(raw_text)
-            return data.get('is_safe', False), data.get('reason', ''), data.get('category', 'ویدیوهای اختصاصی فوتبالی'), data.get('clean_title', title)
+            return (
+                data.get('is_safe', False),
+                data.get('reason', ''),
+                data.get('category', 'ویدیوهای اختصاصی فوتبالی'),
+                data.get('clean_title', title),
+                data.get('is_short', True)
+            )
         else:
             return fallback_evaluate(title)
     except Exception:
@@ -211,7 +226,7 @@ def add_to_playlist(youtube, video_id, playlist_id):
             else:
                 print(f"Note: Could not add to playlist ({e})")
 
-def scrape_all_videos():
+def scrape_website_videos():
     url = "https://footballi.net/video"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
@@ -239,15 +254,62 @@ def scrape_all_videos():
 
             full_url = href if href.startswith('http') else 'https://footballi.net' + href
 
-            if not any(v['id'] == video_id for v in videos):
+            if not any(v['id'] == f"web_{video_id}" for v in videos):
                 videos.append({
-                    'id': video_id,
+                    'id': f"web_{video_id}",
+                    'raw_id': video_id,
                     'title': title,
-                    'page_url': full_url
+                    'page_url': full_url,
+                    'source': 'website'
                 })
     return videos
 
-def extract_video_details(video_page_url):
+def scrape_telegram_shorts():
+    """Scrapes public vertical clips and news videos from https://t.me/s/FootballiApp."""
+    url = "https://t.me/s/FootballiApp"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code != 200:
+            return []
+    except Exception as e:
+        print(f"Could not load t.me/s/FootballiApp ({e})")
+        return []
+
+    soup = BeautifulSoup(res.text, 'html.parser')
+    shorts = []
+
+    for msg in soup.find_all('div', class_='tgme_widget_message'):
+        post_id = msg.get('data-post')
+        if not post_id:
+            continue
+
+        # Check if message contains a video element
+        video_tag = msg.find('video')
+        if not video_tag or not video_tag.get('src'):
+            continue
+
+        mp4_url = video_tag['src']
+        text_el = msg.find('div', class_='tgme_widget_message_text')
+        caption = text_el.text.strip() if text_el else "ویدیو کوتاه فوتبالی"
+        
+        # Take the first line of caption as title
+        first_line = caption.split('\n')[0][:90].strip()
+        clean_name = clean_title(first_line)
+
+        clean_post_id = post_id.replace('/', '_')
+        if not any(s['id'] == f"tg_{clean_post_id}" for s in shorts):
+            shorts.append({
+                'id': f"tg_{clean_post_id}",
+                'raw_id': clean_post_id,
+                'title': clean_name if len(clean_name) > 5 else "ویدیو کوتاه اختصاصی فوتبالی",
+                'page_url': f"https://t.me/{post_id}",
+                'direct_mp4': mp4_url,
+                'source': 'telegram'
+            })
+    return shorts
+
+def extract_website_video_details(video_page_url):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         res = requests.get(video_page_url, headers=headers, timeout=15)
@@ -281,7 +343,7 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
         'snippet': {
             'title': title[:100],
             'description': description,
-            'tags': ['فوتبالی', 'فوتبال ایران', 'استقلال', 'پرسپولیس', 'لیگ برتر'],
+            'tags': ['فوتبالی', 'فوتبال ایران', 'Shorts', 'یوتیوب شورت', 'استقلال', 'پرسپولیس'],
             'categoryId': '17'
         },
         'status': {
@@ -317,35 +379,51 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
 def process_pipeline():
     youtube = get_youtube_service()
     history = load_history()
-    videos = scrape_all_videos()
 
-    print(f"Found {len(videos)} videos on footballi.net/video")
+    # Collect both website videos and Telegram short clips
+    website_videos = scrape_website_videos()
+    telegram_shorts = scrape_telegram_shorts()
 
-    for v in videos:
-        if v['id'] in history:
+    all_items = website_videos + telegram_shorts
+    print(f"Found {len(website_videos)} website videos and {len(telegram_shorts)} Telegram short clips")
+
+    for item in all_items:
+        if item['id'] in history:
             continue
 
-        print(f"\nConsulting AI on: {v['title']}")
-        is_safe, reason, category, clean_title_text = ai_evaluate_video(v['title'], v['page_url'])
+        print(f"\nConsulting AI on [{item['source'].upper()}]: {item['title']}")
+        is_safe, reason, category, clean_title_text, is_short = ai_evaluate_video(item['title'], item['page_url'])
 
         if not is_safe:
             print(f"REJECTED: {reason}")
-            history.append(v['id'])
+            history.append(item['id'])
             save_history(history)
             continue
 
-        print(f"APPROVED: {reason}")
-        print(f"Category: '{category}' | Clean Title: '{clean_title_text}'")
+        # Format title with #Shorts if classified as a short video
+        if is_short:
+            if '#Shorts' not in clean_title_text and '#shorts' not in clean_title_text:
+                if len(clean_title_text) < 90:
+                    clean_title_text = f"{clean_title_text} #Shorts"
 
-        mp4_url, thumb_url, _ = extract_video_details(v['page_url'])
+        print(f"APPROVED: {reason}")
+        print(f"Category: '{category}' | Short: {is_short} | Title: '{clean_title_text}'")
+
+        # Resolve media download URL
+        thumb_url = None
+        if item['source'] == 'telegram':
+            mp4_url = item.get('direct_mp4')
+        else:
+            mp4_url, thumb_url, _ = extract_website_video_details(item['page_url'])
+
         if not mp4_url:
             print(f"Could not locate video stream, skipping.")
             continue
 
-        video_filename = f"temp_{v['id']}.mp4"
-        thumb_filename = f"thumb_{v['id']}.jpg"
+        video_filename = f"temp_{item['raw_id']}.mp4"
+        thumb_filename = f"thumb_{item['raw_id']}.jpg"
 
-        print("Downloading video...")
+        print(f"Downloading {item['source']} video...")
         try:
             with requests.get(mp4_url, stream=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=30) as r:
                 with open(video_filename, 'wb') as f:
@@ -369,7 +447,7 @@ def process_pipeline():
             f"https://footballi.net/\n\n"
             f"دانلود اپلیکیشن فوتبالی:\n"
             f"https://footballi.net/download\n\n"
-            f"#فوتبالی #فوتبال_ایران #{category.replace(' ', '_')}"
+            f"#فوتبالی #فوتبال_ایران #Shorts #{category.replace(' ', '_')}"
         )
 
         try:
@@ -381,10 +459,16 @@ def process_pipeline():
                 thumb_filename if os.path.exists(thumb_filename) else None
             )
 
+            # 1. Add to designated category playlist
             playlist_id = get_or_create_playlist(youtube, category)
             add_to_playlist(youtube, video_id, playlist_id)
 
-            history.append(v['id'])
+            # 2. If it's a short, also add to the dedicated Shorts playlist
+            if is_short:
+                shorts_playlist_id = get_or_create_playlist(youtube, 'ویدیوهای کوتاه (Shorts)')
+                add_to_playlist(youtube, video_id, shorts_playlist_id)
+
+            history.append(item['id'])
             save_history(history)
             print("Done. Pausing 15 seconds before next video...")
             time.sleep(15)
@@ -393,7 +477,7 @@ def process_pipeline():
             err_msg = str(e)
             if 'uploadLimitExceeded' in err_msg or 'quotaExceeded' in err_msg:
                 print("\n[LIMIT HIT] YouTube 24-hour upload quota reached.")
-                print("Stopping run cleanly. Your rejected history is saved, and new uploads will resume on the next run.")
+                print("Stopping run cleanly. History is saved, and new uploads will resume on the next run.")
                 break
             else:
                 print(f"Upload error ({e}), skipping.")
