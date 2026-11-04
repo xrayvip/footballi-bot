@@ -16,7 +16,7 @@ DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 PLAYLIST_CACHE = {}
-ACTIVE_GEMINI_MODEL = None
+WORKING_MODELS = []
 
 def get_youtube_service():
     creds = None
@@ -50,133 +50,118 @@ def clean_title(raw_text):
     cleaned = re.sub(r'comment\s*[\d,]*', '', cleaned)
     return cleaned.strip()
 
-def get_active_gemini_model():
-    """
-    Queries the API for all available models and live-tests them from newest to oldest
-    until it finds the active working model for this project.
-    """
-    global ACTIVE_GEMINI_MODEL
-    if ACTIVE_GEMINI_MODEL:
-        return ACTIVE_GEMINI_MODEL
+def discover_working_models():
+    """Finds available Gemini 3+ Flash models to rotate if one is busy (503)."""
+    global WORKING_MODELS
+    if WORKING_MODELS:
+        return WORKING_MODELS
 
-    if not GEMINI_API_KEY:
-        return None
-
-    candidate_models = [
-        "models/gemini-3.8-flash",
-        "models/gemini-3.6-flash",
+    candidates = [
         "models/gemini-3.5-flash-lite",
-        "models/gemini-3.5-flash",
-        "models/gemini-3.0-flash"
+        "models/gemini-3.6-flash",
+        "models/gemini-3.8-flash",
+        "models/gemini-3.5-flash"
     ]
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
-            models = res.json().get('models', [])
-            api_candidates = []
-            for m in models:
+            for m in res.json().get('models', []):
                 name = m.get('name', '')
                 methods = m.get('supportedGenerationMethods', [])
                 if 'generateContent' in methods and 'gemini' in name:
-                    # Skip deprecated 1.5, 2.0, 2.5 and specialized image/tts models
                     if not any(old in name for old in ['1.5', '2.0', '2.5', 'vision', 'image', 'tts', 'embedding']):
-                        api_candidates.append(name)
-            # Sort newest versions first
-            api_candidates.sort(reverse=True)
-            for c in api_candidates:
-                if c not in candidate_models:
-                    candidate_models.append(c)
-    except Exception as e:
-        print(f"Could not fetch model list: {e}")
+                        if name not in candidates:
+                            candidates.append(name)
+    except Exception:
+        pass
 
-    # Probe candidates to find the first model that returns HTTP 200
-    for model in candidate_models:
-        test_url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GEMINI_API_KEY}"
-        test_payload = {"contents": [{"parts": [{"text": "ping"}]}]}
-        try:
-            r = requests.post(test_url, json=test_payload, timeout=8)
-            if r.status_code == 200:
-                ACTIVE_GEMINI_MODEL = model
-                print(f"Verified working AI model: {ACTIVE_GEMINI_MODEL}")
-                return ACTIVE_GEMINI_MODEL
-        except Exception:
-            continue
+    WORKING_MODELS = candidates
+    return WORKING_MODELS
 
-    return None
-
-def ai_evaluate_video(title, page_url, page_tags_text=""):
+def ai_batch_evaluate(items_to_audit):
     """
-    Evaluates copyright compliance strictly using YouTube Content ID rules.
-    Operates on a strict ZERO-TRUST / WHITELIST-ONLY basis.
+    Evaluates ALL videos in a SINGLE API request to avoid 429 Rate Limits!
+    Automatically retries across backup models if 503 High Demand occurs.
     """
-    model_name = get_active_gemini_model()
-    if not model_name or not GEMINI_API_KEY:
-        print("AI service unavailable -> Rejecting by default for channel safety.")
-        return False, "No working AI model found", "ویدیوهای اختصاصی فوتبالی", title, False
+    if not GEMINI_API_KEY or not items_to_audit:
+        return {}
+
+    models = discover_working_models()
+
+    # Build compact list of videos for the prompt
+    items_payload = []
+    for it in items_to_audit:
+        items_payload.append({
+            "id": it['id'],
+            "title": it['eval_title'],
+            "context": it['context_text'][:200]
+        })
 
     prompt = f"""
 You are the Chief YouTube Copyright Compliance Auditor for Footballi (فوتبالی).
-Your primary mission: PROTECT THE YOUTUBE CHANNEL FROM COPYRIGHT STRIKES AND GLOBAL CONTENT ID BLOCKS.
+Audit this batch of {len(items_payload)} videos for YouTube Content ID safety.
 
-Video Details to Audit:
-- Title: "{title}"
-- Page URL: "{page_url}"
-- Context/Tags from webpage: "{page_tags_text}"
+INPUT VIDEOS:
+{json.dumps(items_payload, ensure_ascii=False, indent=2)}
 
-YOUTUBE CONTENT ID COMPLIANCE POLICIES:
+YOUTUBE CONTENT ID COMPLIANCE RULES:
 
-1. ABSOLUTE REJECTION (is_safe = false) - MUST BLOCK:
-   - ANY match broadcast footage, goals, highlights, or 3D animations from European competitions or leagues (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
-   - ANY match broadcast footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN CLUB (Esteghlal, Persepolis, Tractor, Sepahan, Gol Gohar) IS PLAYING! The AFC owns international broadcast rights and blocks them globally.
-   - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips (Real Madrid, Man City, Arsenal, Leipzig, Brugge, PSV, Dortmund, Betis, Como, Lens, etc.).
-   - Any video using foreign satellite commentary audio (beIN, Sky, DAZN, etc.).
+1. REJECT (is_safe = false):
+   - ANY match footage, goals, highlights, or 3D animations from European leagues or UEFA (Champions League, Europa League, Conference League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
+   - ANY match footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN TEAM IS PLAYING!
+   - ANY foreign club matches, foreign goals, foreign player awards, or foreign stadium arrivals (e.g., Real Madrid, Man City, Arsenal, Leipzig, Napoli, Brugge, PSV, Dortmund, Betis, Como, Lens, Viking, Sabah, etc.).
 
-2. STRICT APPROVAL (is_safe = true) - ONLY ALLOW:
-   - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر خلیج فارس / لیگ برتر ایران), Hazfi Cup (جام حذفی ایران), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal League (لیگ فوتبال و فوتسال بانوان).
-   - Original Non-Broadcast Media: In-person player/coach interviews (مصاحبه اختصاصی، صحبت‌های علی سامره و غیره), press room conferences (نشست خبری), studio shows and tactical talks (برنامه ویدیوکست، تحلیل، کارشناسی داوری), field-side training of Iranian teams (تمرینات تیم‌های ایرانی), fan reactions and atmosphere (حواشی و هواداران).
+2. APPROVE (is_safe = true):
+   - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر ایران), Hazfi Cup (جام حذفی), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal.
+   - Original Non-Broadcast Media: In-person interviews with Iranian players/coaches/experts (e.g. مصاحبه علی سامره درباره تیم ملی, نشست خبری), studio shows and tactical talks (ویدیوکست فوتبالی، کارشناسی داوری), field-side training of Iranian teams, domestic fan reactions.
 
-If there is ANY doubt or foreign tournament involvement, you MUST default to REJECT (is_safe = false).
-
-Format Decision:
-- If duration is short (clip, goal, reaction, interview under 3 mins), set "is_short": true.
-- If it's a full domestic match summary or full studio video cast, set "is_short": false.
-
-Output ONLY a raw, valid JSON object (no markdown formatting):
-{{
-  "is_safe": true or false,
-  "reason": "Detailed reason in English",
-  "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-  "clean_title": "Professional Persian title without noise",
-  "is_short": true or false
-}}
+Output ONLY a raw JSON array of objects, one for each input "id":
+[
+  {{
+    "id": "exact input id",
+    "is_safe": true or false,
+    "reason": "Short reason in English",
+    "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
+    "clean_title": "Clean Persian title without emojis or noise",
+    "is_short": true or false
+  }}
+]
 """
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
-    }
 
-    try:
-        res = requests.post(api_url, json=payload, timeout=12)
-        if res.status_code == 200:
-            result = res.json()
-            raw_text = result['candidates'][0]['content']['parts'][0]['text']
-            data = json.loads(raw_text)
-            return (
-                data.get('is_safe', False),
-                data.get('reason', 'Rejected by AI'),
-                data.get('category', 'ویدیوهای اختصاصی فوتبالی'),
-                data.get('clean_title', title),
-                data.get('is_short', True)
-            )
-        else:
-            print(f"Gemini API returned status {res.status_code} ({res.text[:100]}) -> Defaulting to REJECT")
-    except Exception as e:
-        print(f"AI evaluation exception: {e} -> Defaulting to REJECT")
+    for model_name in models:
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
+        }
 
-    return False, "AI evaluation failed; rejected for safety", "ویدیوهای اختصاصی فوتبالی", title, False
+        for attempt in range(2):
+            try:
+                print(f"Sending batch of {len(items_payload)} videos to AI ({model_name})...")
+                res = requests.post(api_url, json=payload, timeout=25)
+                if res.status_code == 200:
+                    raw_text = res.json()['candidates'][0]['content']['parts'][0]['text']
+                    results_list = json.loads(raw_text)
+                    results_map = {}
+                    for r in results_list:
+                        if isinstance(r, dict) and 'id' in r:
+                            results_map[r['id']] = r
+                    print(f"Successfully audited {len(results_map)} videos in 1 batch call!")
+                    return results_map
+                elif res.status_code in [429, 503]:
+                    print(f"Model {model_name} busy (HTTP {res.status_code}), retrying in 4s...")
+                    time.sleep(4)
+                else:
+                    # 404 or unsupported model, move to next candidate model immediately
+                    break
+            except Exception as e:
+                print(f"Batch call exception on {model_name}: {e}")
+                time.sleep(2)
+
+    print("All AI models were busy or unavailable. Will retry on next scheduled run.")
+    return None
 
 def get_or_create_playlist(youtube, playlist_title):
     if playlist_title in PLAYLIST_CACHE:
@@ -394,26 +379,44 @@ def process_pipeline():
     telegram_shorts = scrape_telegram_shorts()
 
     all_items = website_videos + telegram_shorts
-    print(f"Found {len(website_videos)} website videos and {len(telegram_shorts)} Telegram short clips")
+    new_items = [it for it in all_items if it['id'] not in history]
 
-    for item in all_items:
-        if item['id'] in history:
-            continue
+    print(f"Found {len(all_items)} total videos ({len(new_items)} new to evaluate)")
+    if not new_items:
+        return
 
-        thumb_url = None
-        context_text = ""
+    # Enrich new items with page metadata before batch AI call
+    for item in new_items:
         if item['source'] == 'telegram':
-            mp4_url = item.get('direct_mp4')
-            context_text = item.get('caption', '')
-            clean_page_title = item['title']
+            item['mp4_url'] = item.get('direct_mp4')
+            item['thumb_url'] = None
+            item['context_text'] = item.get('caption', '')
+            item['eval_title'] = item['title']
         else:
             mp4_url, thumb_url, clean_page_title, context_text = extract_website_video_details(item['page_url'])
+            item['mp4_url'] = mp4_url
+            item['thumb_url'] = thumb_url
+            item['context_text'] = context_text
+            item['eval_title'] = clean_page_title if clean_page_title else item['title']
 
-        eval_title = clean_page_title if clean_page_title else item['title']
+    # Audit all new items in ONE single AI request
+    audit_results = ai_batch_evaluate(new_items)
+    if audit_results is None:
+        # AI temporarily unreachable; do NOT mark as rejected so next run evaluates them
+        return
 
-        print(f"\n[AUDIT] Consulting AI on [{item['source'].upper()}]: {eval_title}")
-        is_safe, reason, category, clean_title_text, is_short = ai_evaluate_video(eval_title, item['page_url'], context_text)
+    for item in new_items:
+        decision = audit_results.get(item['id'])
+        if not decision:
+            continue
 
+        is_safe = decision.get('is_safe', False)
+        reason = decision.get('reason', 'No reason provided')
+        category = decision.get('category', 'ویدیوهای اختصاصی فوتبالی')
+        clean_title_text = decision.get('clean_title', item['eval_title'])
+        is_short = decision.get('is_short', True)
+
+        print(f"\n[AUDIT] [{item['source'].upper()}] {item['eval_title']}")
         if not is_safe:
             print(f"-> REJECTED BY AI: {reason}")
             history.append(item['id'])
@@ -426,6 +429,9 @@ def process_pipeline():
                 clean_title_text = f"{clean_title_text} #Shorts"
 
         print(f"Destination: Playlist '{category}' | Short: {is_short} | Title: '{clean_title_text}'")
+
+        mp4_url = item.get('mp4_url')
+        thumb_url = item.get('thumb_url')
 
         if not mp4_url:
             print("Could not locate video stream, skipping.")
