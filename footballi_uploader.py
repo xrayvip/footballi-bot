@@ -16,7 +16,7 @@ DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 PLAYLIST_CACHE = {}
-ACTIVE_GEMINI_MODEL = "models/gemini-2.0-flash"
+ACTIVE_GEMINI_MODEL = None
 
 def get_youtube_service():
     creds = None
@@ -51,16 +51,70 @@ def clean_title(raw_text):
     return cleaned.strip()
 
 def get_active_gemini_model():
-    return ACTIVE_GEMINI_MODEL
+    """
+    Queries the API for all available models and live-tests them from newest to oldest
+    until it finds the active working model for this project.
+    """
+    global ACTIVE_GEMINI_MODEL
+    if ACTIVE_GEMINI_MODEL:
+        return ACTIVE_GEMINI_MODEL
+
+    if not GEMINI_API_KEY:
+        return None
+
+    candidate_models = [
+        "models/gemini-3.8-flash",
+        "models/gemini-3.6-flash",
+        "models/gemini-3.5-flash-lite",
+        "models/gemini-3.5-flash",
+        "models/gemini-3.0-flash"
+    ]
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            models = res.json().get('models', [])
+            api_candidates = []
+            for m in models:
+                name = m.get('name', '')
+                methods = m.get('supportedGenerationMethods', [])
+                if 'generateContent' in methods and 'gemini' in name:
+                    # Skip deprecated 1.5, 2.0, 2.5 and specialized image/tts models
+                    if not any(old in name for old in ['1.5', '2.0', '2.5', 'vision', 'image', 'tts', 'embedding']):
+                        api_candidates.append(name)
+            # Sort newest versions first
+            api_candidates.sort(reverse=True)
+            for c in api_candidates:
+                if c not in candidate_models:
+                    candidate_models.append(c)
+    except Exception as e:
+        print(f"Could not fetch model list: {e}")
+
+    # Probe candidates to find the first model that returns HTTP 200
+    for model in candidate_models:
+        test_url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GEMINI_API_KEY}"
+        test_payload = {"contents": [{"parts": [{"text": "ping"}]}]}
+        try:
+            r = requests.post(test_url, json=test_payload, timeout=8)
+            if r.status_code == 200:
+                ACTIVE_GEMINI_MODEL = model
+                print(f"Verified working AI model: {ACTIVE_GEMINI_MODEL}")
+                return ACTIVE_GEMINI_MODEL
+        except Exception:
+            continue
+
+    return None
 
 def ai_evaluate_video(title, page_url, page_tags_text=""):
     """
     Evaluates copyright compliance strictly using YouTube Content ID rules.
-    Operates on a strict ZERO-TRUST / WHITELIST-ONLY basis via Gemini 2.0 Flash.
+    Operates on a strict ZERO-TRUST / WHITELIST-ONLY basis.
     """
-    if not GEMINI_API_KEY:
+    model_name = get_active_gemini_model()
+    if not model_name or not GEMINI_API_KEY:
         print("AI service unavailable -> Rejecting by default for channel safety.")
-        return False, "AI Key missing", "ویدیوهای اختصاصی فوتبالی", title, False
+        return False, "No working AI model found", "ویدیوهای اختصاصی فوتبالی", title, False
 
     prompt = f"""
 You are the Chief YouTube Copyright Compliance Auditor for Footballi (فوتبالی).
@@ -76,12 +130,12 @@ YOUTUBE CONTENT ID COMPLIANCE POLICIES:
 1. ABSOLUTE REJECTION (is_safe = false) - MUST BLOCK:
    - ANY match broadcast footage, goals, highlights, or 3D animations from European competitions or leagues (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
    - ANY match broadcast footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN CLUB (Esteghlal, Persepolis, Tractor, Sepahan, Gol Gohar) IS PLAYING! The AFC owns international broadcast rights and blocks them globally.
-   - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips (Real Madrid, Man City, Arsenal, Leipzig, etc.).
+   - ANY foreign club matches, foreign goals, foreign training sessions, or foreign league clips (Real Madrid, Man City, Arsenal, Leipzig, Brugge, PSV, Dortmund, Betis, Como, Lens, etc.).
    - Any video using foreign satellite commentary audio (beIN, Sky, DAZN, etc.).
 
 2. STRICT APPROVAL (is_safe = true) - ONLY ALLOW:
    - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر خلیج فارس / لیگ برتر ایران), Hazfi Cup (جام حذفی ایران), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal League (لیگ فوتبال و فوتسال بانوان).
-   - Original Non-Broadcast Media: In-person player/coach interviews (مصاحبه اختصاصی), press room conferences (نشست خبری), studio shows and tactical talks (برنامه ویدیوکست، تحلیل، کارشناسی داوری), field-side training (تمرینات تیم‌های ایرانی), fan reactions and atmosphere (حواشی و هواداران).
+   - Original Non-Broadcast Media: In-person player/coach interviews (مصاحبه اختصاصی، صحبت‌های علی سامره و غیره), press room conferences (نشست خبری), studio shows and tactical talks (برنامه ویدیوکست، تحلیل، کارشناسی داوری), field-side training of Iranian teams (تمرینات تیم‌های ایرانی), fan reactions and atmosphere (حواشی و هواداران).
 
 If there is ANY doubt or foreign tournament involvement, you MUST default to REJECT (is_safe = false).
 
@@ -98,7 +152,7 @@ Output ONLY a raw, valid JSON object (no markdown formatting):
   "is_short": true or false
 }}
 """
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/{ACTIVE_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
@@ -118,7 +172,7 @@ Output ONLY a raw, valid JSON object (no markdown formatting):
                 data.get('is_short', True)
             )
         else:
-            print(f"Gemini API returned status {res.status_code} ({res.text[:80]}) -> Defaulting to REJECT")
+            print(f"Gemini API returned status {res.status_code} ({res.text[:100]}) -> Defaulting to REJECT")
     except Exception as e:
         print(f"AI evaluation exception: {e} -> Defaulting to REJECT")
 
