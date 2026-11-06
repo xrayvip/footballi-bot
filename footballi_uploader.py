@@ -2,6 +2,7 @@ import os
 import json
 import time
 import re
+import subprocess
 from difflib import SequenceMatcher
 import requests
 from bs4 import BeautifulSoup
@@ -15,6 +16,11 @@ SCOPES = ['https://www.googleapis.com/auth/youtube']
 HISTORY_FILE = 'uploaded_matches.json'
 DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+
+# Minimum duration for horizontal (non-Short) videos: 5 minutes (300 seconds)
+MIN_LONG_VIDEO_SECONDS = 300
+# Maximum duration for vertical YouTube Shorts: 3 minutes (180 seconds)
+MAX_SHORT_VIDEO_SECONDS = 180
 
 PLAYLIST_CACHE = {}
 WORKING_MODELS = []
@@ -51,18 +57,16 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 def normalize_persian(text):
-    """Normalizes Persian text for accurate duplicate comparison across Website & Telegram."""
     if not text:
         return ""
     text = text.replace('ی', 'ی').replace('ي', 'ی').replace('ک', 'ک').replace('ك', 'ک')
     text = text.replace('\u200c', ' ')
-    text = re.sub(r'#\S+', '', text)  # Remove hashtags like #Shorts
-    text = re.sub(r'[^\w\s]', ' ', text)  # Remove emojis and punctuation
+    text = re.sub(r'#\S+', '', text)
+    text = re.sub(r'[^\w\s]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip().lower()
     return text
 
 def is_duplicate_title(candidate_title, existing_titles):
-    """Checks if a video title already exists on the YouTube channel or history."""
     norm_cand = normalize_persian(candidate_title)
     if not norm_cand or len(norm_cand) < 5:
         return False
@@ -71,18 +75,15 @@ def is_duplicate_title(candidate_title, existing_titles):
         norm_ex = normalize_persian(existing)
         if not norm_ex:
             continue
-        # Direct substring match
         if norm_cand in norm_ex or norm_ex in norm_cand:
             if min(len(norm_cand), len(norm_ex)) > 15:
                 return True
-        # Fuzzy similarity match (>= 78% identical)
         similarity = SequenceMatcher(None, norm_cand, norm_ex).ratio()
         if similarity >= 0.78:
             return True
     return False
 
 def get_existing_youtube_titles(youtube):
-    """Fetches the last 100 uploaded videos directly from the YouTube channel."""
     titles = []
     try:
         ch_res = youtube.channels().list(part='contentDetails', mine=True).execute()
@@ -92,7 +93,7 @@ def get_existing_youtube_titles(youtube):
         uploads_playlist_id = items[0]['contentDetails']['relatedPlaylists']['uploads']
 
         next_page = None
-        for _ in range(2):  # Up to 100 recent videos
+        for _ in range(2):
             pl_res = youtube.playlistItems().list(
                 part='snippet',
                 playlistId=uploads_playlist_id,
@@ -109,6 +110,45 @@ def get_existing_youtube_titles(youtube):
     except Exception as e:
         print("Note: Could not fetch existing YouTube videos list:", str(e))
     return titles
+
+def extract_duration_seconds(raw_text):
+    """Extracts duration in seconds from strings like '4:41' or '11:37' if present."""
+    match = re.search(r'(\d+):(\d+)', raw_text)
+    if match:
+        minutes = int(match.group(1))
+        seconds = int(match.group(2))
+        return minutes * 60 + seconds
+    return None
+
+def inspect_video_file(file_path):
+    """
+    Uses ffprobe to inspect actual video width, height, and duration in seconds.
+    Returns (width, height, duration_seconds).
+    """
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height,duration:format=duration',
+            '-of', 'json',
+            file_path
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        data = json.loads(res.stdout)
+        streams = data.get('streams', [])
+        width = int(streams[0].get('width', 0)) if streams else 0
+        height = int(streams[0].get('height', 0)) if streams else 0
+        
+        duration = 0.0
+        if streams and 'duration' in streams[0]:
+            duration = float(streams[0]['duration'])
+        elif 'format' in data and 'duration' in data['format']:
+            duration = float(data['format']['duration'])
+
+        return width, height, duration
+    except Exception as e:
+        print("Note: Could not run ffprobe inspection:", str(e))
+        return 0, 0, 0.0
 
 def clean_title(raw_text):
     cleaned = re.sub(r'play_arrow\d*:\d*', '', raw_text)
@@ -193,8 +233,7 @@ Output ONLY a raw JSON array of objects, one for each input "id":
     "is_safe": true or false,
     "reason": "Short reason in English",
     "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-    "clean_title": "Clean Persian title without emojis or noise",
-    "is_short": true or false
+    "clean_title": "Clean Persian title without emojis or noise"
   }}
 ]
 """
@@ -306,7 +345,9 @@ def scrape_website_videos():
                 continue
             
             video_id = parts[0]
-            title = clean_title(a.text)
+            raw_text = a.text
+            duration_hint = extract_duration_seconds(raw_text)
+            title = clean_title(raw_text)
             if len(title) < 5:
                 continue
 
@@ -317,6 +358,7 @@ def scrape_website_videos():
                     'id': f"web_{video_id}",
                     'raw_id': video_id,
                     'title': title,
+                    'duration_hint': duration_hint,
                     'page_url': full_url,
                     'source': 'website'
                 })
@@ -358,6 +400,7 @@ def scrape_telegram_shorts():
                 'id': f"tg_{clean_post_id}",
                 'raw_id': clean_post_id,
                 'title': clean_name if len(clean_name) > 5 else "ویدیو کوتاه اختصاصی فوتبالی",
+                'duration_hint': None,
                 'page_url': f"https://t.me/{post_id}",
                 'direct_mp4': mp4_url,
                 'caption': caption,
@@ -449,7 +492,6 @@ def process_pipeline():
 
     all_items = website_videos + telegram_shorts
 
-    # Filter out IDs already in history (checking both raw_id and prefixed id)
     candidates = []
     for it in all_items:
         if it['id'] in history or it['raw_id'] in history:
@@ -460,7 +502,6 @@ def process_pipeline():
     if not candidates:
         return
 
-    # Enrich candidates and check against existing YouTube channel titles
     new_items = []
     for item in candidates:
         if item['source'] == 'telegram':
@@ -475,7 +516,6 @@ def process_pipeline():
             item['context_text'] = context_text
             item['eval_title'] = clean_page_title if clean_page_title else item['title']
 
-        # Check if this title is already live on YouTube or duplicated in the current batch
         if is_duplicate_title(item['eval_title'], existing_yt_titles):
             print(f"[SKIP DUPLICATE] Already on YouTube channel: {item['eval_title']}")
             history.append(item['id'])
@@ -488,7 +528,6 @@ def process_pipeline():
         print("All candidate videos already exist on the channel.")
         return
 
-    # Audit remaining genuinely new items in ONE single AI request
     audit_results = ai_batch_evaluate(new_items, existing_yt_titles)
     if audit_results is None:
         return
@@ -502,7 +541,6 @@ def process_pipeline():
         reason = decision.get('reason', 'No reason provided')
         category = decision.get('category', 'ویدیوهای اختصاصی فوتبالی')
         clean_title_text = decision.get('clean_title', item['eval_title'])
-        is_short = decision.get('is_short', True)
 
         print(f"\n[AUDIT] [{item['source'].upper()}] {item['eval_title']}")
         if not is_safe:
@@ -511,19 +549,11 @@ def process_pipeline():
             save_history(history)
             continue
 
-        # Double-check the AI's cleaned title against existing YouTube titles
         if is_duplicate_title(clean_title_text, existing_yt_titles):
             print(f"-> SKIP DUPLICATE: '{clean_title_text}' already uploaded in this session.")
             history.append(item['id'])
             save_history(history)
             continue
-
-        print(f"-> APPROVED BY AI: {reason}")
-        if is_short and '#Shorts' not in clean_title_text and '#shorts' not in clean_title_text:
-            if len(clean_title_text) < 90:
-                clean_title_text = f"{clean_title_text} #Shorts"
-
-        print(f"Destination: Playlist '{category}' | Short: {is_short} | Title: '{clean_title_text}'")
 
         mp4_url = item.get('mp4_url')
         thumb_url = item.get('thumb_url')
@@ -535,7 +565,7 @@ def process_pipeline():
         video_filename = f"temp_{item['raw_id']}.mp4"
         thumb_filename = f"thumb_{item['raw_id']}.jpg"
 
-        print(f"Downloading {item['source']} stream...")
+        print(f"Downloading {item['source']} stream to verify dimensions & duration...")
         try:
             with requests.get(mp4_url, stream=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=30) as r:
                 with open(video_filename, 'wb') as f:
@@ -543,9 +573,36 @@ def process_pipeline():
                         f.write(chunk)
         except Exception as e:
             print("Download error:", str(e), "- skipping.")
+            if os.path.exists(video_filename):
+                os.remove(video_filename)
             continue
 
-        if thumb_url:
+        # Inspect actual video resolution and length using ffprobe
+        width, height, duration = inspect_video_file(video_filename)
+        if duration == 0 and item.get('duration_hint'):
+            duration = float(item['duration_hint'])
+
+        is_vertical_or_square = (height >= width and width > 0)
+        is_youtube_short = is_vertical_or_square and (0 < duration <= MAX_SHORT_VIDEO_SECONDS)
+
+        print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Is Short: {is_youtube_short}")
+
+        # STRICT RULE: If NOT a vertical Short, it MUST be at least 5 minutes (300 seconds)
+        if not is_youtube_short and duration < MIN_LONG_VIDEO_SECONDS:
+            print(f"-> SKIP DURATION: Horizontal video is under 5 minutes ({int(duration)}s < 300s). Not a Short and too short for standard YouTube.")
+            if os.path.exists(video_filename):
+                os.remove(video_filename)
+            history.append(item['id'])
+            save_history(history)
+            continue
+
+        if is_youtube_short and '#Shorts' not in clean_title_text and '#shorts' not in clean_title_text:
+            if len(clean_title_text) < 90:
+                clean_title_text = f"{clean_title_text} #Shorts"
+
+        print(f"-> APPROVED FOR UPLOAD: Playlist '{category}' | Short: {is_youtube_short} | Title: '{clean_title_text}'")
+
+        if thumb_url and not is_youtube_short:
             try:
                 with requests.get(thumb_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15) as r:
                     with open(thumb_filename, 'wb') as f:
@@ -559,7 +616,7 @@ def process_pipeline():
             f"https://footballi.net/\n\n"
             f"دانلود اپلیکیشن فوتبالی:\n"
             f"https://footballi.net/download\n\n"
-            f"#فوتبالی #فوتبال_ایران #Shorts #{category.replace(' ', '_')}"
+            f"#فوتبالی #فوتبال_ایران {'#Shorts ' if is_youtube_short else ''}#{category.replace(' ', '_')}"
         )
 
         try:
@@ -568,17 +625,16 @@ def process_pipeline():
                 video_filename, 
                 clean_title_text, 
                 description, 
-                thumb_filename if os.path.exists(thumb_filename) else None
+                thumb_filename if (not is_youtube_short and os.path.exists(thumb_filename)) else None
             )
 
             playlist_id = get_or_create_playlist(youtube, category)
             add_to_playlist(youtube, video_id, playlist_id)
 
-            if is_short:
+            if is_youtube_short:
                 shorts_playlist_id = get_or_create_playlist(youtube, 'ویدیوهای کوتاه (Shorts)')
                 add_to_playlist(youtube, video_id, shorts_playlist_id)
 
-            # Record both in history AND live memory so Telegram won't re-upload a Website video
             history.append(item['id'])
             history.append(item['raw_id'])
             save_history(history)
