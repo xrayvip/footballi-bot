@@ -19,7 +19,7 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 # Minimum duration for general horizontal videos: 5 minutes (300 seconds)
 MIN_LONG_VIDEO_SECONDS = 300
-# Minimum duration for Match Summaries (خلاصه بازی): 90 seconds (so 3-4 min highlights are NEVER missed!)
+# Minimum duration for Match Summaries (خلاصه بازی): 90 seconds
 MIN_SUMMARY_VIDEO_SECONDS = 90
 # Maximum duration for vertical YouTube Shorts: 3 minutes (180 seconds)
 MAX_SHORT_VIDEO_SECONDS = 180
@@ -69,7 +69,6 @@ def normalize_persian(text):
     return text
 
 def is_duplicate_title(candidate_title, existing_titles):
-    """Strict duplicate check (requires >= 88% similarity so different matches of same team aren't skipped)."""
     norm_cand = normalize_persian(candidate_title)
     if not norm_cand or len(norm_cand) < 8:
         return False
@@ -183,7 +182,6 @@ def discover_working_models():
     return WORKING_MODELS
 
 def ai_batch_evaluate(items_to_audit, existing_yt_titles):
-    """Evaluates candidate videos in chunks of 15 for high accuracy."""
     if not GEMINI_API_KEY or not items_to_audit:
         return {}
 
@@ -191,7 +189,6 @@ def ai_batch_evaluate(items_to_audit, existing_yt_titles):
     recent_channel_titles = existing_yt_titles[:25]
     all_results_map = {}
 
-    # Process in chunks of 15 so the AI never misses or truncates items
     chunk_size = 15
     for i in range(0, len(items_to_audit), chunk_size):
         chunk = items_to_audit[i:i + chunk_size]
@@ -220,11 +217,12 @@ STRICT AUDIT RULES:
      * Persian Gulf Pro League (لیگ برتر ایران / خلیج فارس) - e.g., پرسپولیس، استقلال، سپاهان، تراکتور، گل‌گهر، ملوان، فولاد، ذوب‌آهن، شمس‌آذر، آلومینیوم، چادرملو، خیبر، مس رفسنجان، نساجی، هوادار، استقلال خوزستان، فجرسپاسی، پیکان، صنعت نفت و غیره.
      * Azadegan League (لیگ آزادگان) & Hazfi Cup (جام حذفی ایران).
      * Iranian Women's Football/Futsal & Iran National Team interviews/analysis.
-     * Studio shows, podcasts ("ویدیوکست"), and referee reviews ("کارشناسی داوری").
+     * Studio shows, podcasts ("ویدیوکست", "شب‌های فوتبالی"), and referee reviews ("کارشناسی داوری").
 
 2. REJECT ONLY FOREIGN / AFC BROADCASTS (is_safe = false):
    - European club matches/goals (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
    - AFC Champions League Elite / ACL Two match broadcasts.
+   - Foreign player AI edits or foreign clips (e.g. Ronaldo, Messi, Foreign leagues).
    - Exact duplicate of a video already in RECENTLY UPLOADED VIDEOS.
 
 Output ONLY a raw JSON array of objects, one for each input "id":
@@ -331,14 +329,13 @@ def add_to_playlist(youtube, video_id, playlist_id):
                 print("Note: Could not add to playlist:", str(e))
 
 def scrape_website_videos():
-    """Scrapes pages 1, 2, and 3 of footballi.net/video so no match summary is ever missed."""
+    """Scrapes both the main homepage and /video hub to catch all match summaries and clips."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     videos = []
 
     urls_to_check = [
         "https://footballi.net/video",
-        "https://footballi.net/video?page=2",
-        "https://footballi.net/video?page=3"
+        "https://footballi.net/"
     ]
 
     for url in urls_to_check:
@@ -403,6 +400,9 @@ def scrape_telegram_shorts():
             continue
 
         mp4_url = video_tag['src']
+        dur_el = msg.find('time', class_='tgme_widget_message_video_duration')
+        dur_hint = extract_duration_seconds(dur_el.text) if dur_el else None
+
         text_el = msg.find('div', class_='tgme_widget_message_text')
         caption = text_el.text.strip() if text_el else "ویدیو کوتاه فوتبالی"
         
@@ -415,7 +415,7 @@ def scrape_telegram_shorts():
                 'id': f"tg_{clean_post_id}",
                 'raw_id': clean_post_id,
                 'title': clean_name if len(clean_name) > 5 else "ویدیو کوتاه اختصاصی فوتبالی",
-                'duration_hint': None,
+                'duration_hint': dur_hint,
                 'page_url': f"https://t.me/{post_id}",
                 'direct_mp4': mp4_url,
                 'caption': caption,
@@ -505,7 +505,6 @@ def process_pipeline():
     website_videos = scrape_website_videos()
     telegram_shorts = scrape_telegram_shorts()
 
-    # Prioritize Match Summaries ("خلاصه بازی") at the very top of the queue!
     website_videos.sort(key=lambda x: 0 if 'خلاصه بازی' in x['title'] else 1)
 
     all_items = website_videos + telegram_shorts
@@ -605,10 +604,6 @@ def process_pipeline():
 
         print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Short: {is_youtube_short} | Match Summary: {is_match_summary}")
 
-        # Duration Policy:
-        # 1. Match Summaries ("خلاصه بازی") are allowed if >= 90 seconds (so 3-4 min highlights are never skipped!)
-        # 2. Vertical Shorts are allowed if <= 180 seconds
-        # 3. Other horizontal videos must be >= 300 seconds (5 minutes)
         if not is_youtube_short:
             min_required = MIN_SUMMARY_VIDEO_SECONDS if is_match_summary else MIN_LONG_VIDEO_SECONDS
             if duration < min_required:
