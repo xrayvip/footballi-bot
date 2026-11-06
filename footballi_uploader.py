@@ -17,8 +17,10 @@ HISTORY_FILE = 'uploaded_matches.json'
 DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
-# Minimum duration for horizontal (non-Short) videos: 5 minutes (300 seconds)
+# Minimum duration for general horizontal videos: 5 minutes (300 seconds)
 MIN_LONG_VIDEO_SECONDS = 300
+# Minimum duration for Match Summaries (خلاصه بازی): 90 seconds (so 3-4 min highlights are NEVER missed!)
+MIN_SUMMARY_VIDEO_SECONDS = 90
 # Maximum duration for vertical YouTube Shorts: 3 minutes (180 seconds)
 MAX_SHORT_VIDEO_SECONDS = 180
 
@@ -67,19 +69,19 @@ def normalize_persian(text):
     return text
 
 def is_duplicate_title(candidate_title, existing_titles):
+    """Strict duplicate check (requires >= 88% similarity so different matches of same team aren't skipped)."""
     norm_cand = normalize_persian(candidate_title)
-    if not norm_cand or len(norm_cand) < 5:
+    if not norm_cand or len(norm_cand) < 8:
         return False
 
     for existing in existing_titles:
         norm_ex = normalize_persian(existing)
         if not norm_ex:
             continue
-        if norm_cand in norm_ex or norm_ex in norm_cand:
-            if min(len(norm_cand), len(norm_ex)) > 15:
-                return True
+        if norm_cand == norm_ex:
+            return True
         similarity = SequenceMatcher(None, norm_cand, norm_ex).ratio()
-        if similarity >= 0.78:
+        if similarity >= 0.88:
             return True
     return False
 
@@ -112,7 +114,6 @@ def get_existing_youtube_titles(youtube):
     return titles
 
 def extract_duration_seconds(raw_text):
-    """Extracts duration in seconds from strings like '4:41' or '11:37' if present."""
     match = re.search(r'(\d+):(\d+)', raw_text)
     if match:
         minutes = int(match.group(1))
@@ -121,10 +122,6 @@ def extract_duration_seconds(raw_text):
     return None
 
 def inspect_video_file(file_path):
-    """
-    Uses ffprobe to inspect actual video width, height, and duration in seconds.
-    Returns (width, height, duration_seconds).
-    """
     try:
         cmd = [
             'ffprobe', '-v', 'error',
@@ -186,27 +183,31 @@ def discover_working_models():
     return WORKING_MODELS
 
 def ai_batch_evaluate(items_to_audit, existing_yt_titles):
-    """Evaluates ALL videos in a SINGLE API request for Copyright AND Duplicates."""
+    """Evaluates candidate videos in chunks of 15 for high accuracy."""
     if not GEMINI_API_KEY or not items_to_audit:
         return {}
 
     models = discover_working_models()
+    recent_channel_titles = existing_yt_titles[:25]
+    all_results_map = {}
 
-    items_payload = []
-    for it in items_to_audit:
-        items_payload.append({
-            "id": it['id'],
-            "title": it['eval_title'],
-            "context": it['context_text'][:200]
-        })
+    # Process in chunks of 15 so the AI never misses or truncates items
+    chunk_size = 15
+    for i in range(0, len(items_to_audit), chunk_size):
+        chunk = items_to_audit[i:i + chunk_size]
+        items_payload = []
+        for it in chunk:
+            items_payload.append({
+                "id": it['id'],
+                "title": it['eval_title'],
+                "context": it['context_text'][:200]
+            })
 
-    recent_channel_titles = existing_yt_titles[:30]
-
-    prompt = f"""
+        prompt = f"""
 You are the Chief YouTube Copyright & Content Auditor for Footballi (فوتبالی).
 Audit this batch of {len(items_payload)} candidate videos.
 
-RECENTLY UPLOADED VIDEOS ALREADY ON OUR YOUTUBE CHANNEL (DO NOT DUPLICATE THESE):
+RECENTLY UPLOADED VIDEOS ON OUR CHANNEL:
 {json.dumps(recent_channel_titles, ensure_ascii=False)}
 
 CANDIDATE VIDEOS TO AUDIT:
@@ -214,17 +215,17 @@ CANDIDATE VIDEOS TO AUDIT:
 
 STRICT AUDIT RULES:
 
-1. REJECT DUPLICATES (is_safe = false):
-   - If a candidate video covers the exact same interview, goal, or clip already listed in RECENTLY UPLOADED VIDEOS (or duplicates another item in this same batch), set "is_safe": false with reason "Duplicate content already uploaded".
+1. ALWAYS APPROVE IRANIAN DOMESTIC FOOTBALL (is_safe = true):
+   - ALWAYS APPROVE match summaries ("خلاصه بازی"), goals, highlights, interviews, press conferences, referee analysis, and sidelines from Iranian domestic competitions:
+     * Persian Gulf Pro League (لیگ برتر ایران / خلیج فارس) - e.g., پرسپولیس، استقلال، سپاهان، تراکتور، گل‌گهر، ملوان، فولاد، ذوب‌آهن، شمس‌آذر، آلومینیوم، چادرملو، خیبر، مس رفسنجان، نساجی، هوادار، استقلال خوزستان، فجرسپاسی، پیکان، صنعت نفت و غیره.
+     * Azadegan League (لیگ آزادگان) & Hazfi Cup (جام حذفی ایران).
+     * Iranian Women's Football/Futsal & Iran National Team interviews/analysis.
+     * Studio shows, podcasts ("ویدیوکست"), and referee reviews ("کارشناسی داوری").
 
-2. REJECT COPYRIGHT RISKS (is_safe = false):
-   - ANY match footage, goals, highlights, or 3D animations from European leagues or UEFA (Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, etc.).
-   - ANY match footage from AFC international competitions (AFC Champions League Elite, AFC Champions League 2, Asian Cup) - EVEN IF AN IRANIAN TEAM IS PLAYING!
-   - ANY foreign club matches, foreign goals, or foreign stadium clips.
-
-3. APPROVE SAFE ORIGINAL CONTENT (is_safe = true):
-   - Domestic Iranian Football: Persian Gulf Pro League (لیگ برتر ایران), Hazfi Cup (جام حذفی), League 1 (لیگ آزادگان), Iranian Women's Football/Futsal.
-   - Original Non-Broadcast Media: In-person interviews with Iranian players/coaches/experts (مصاحبه، نشست خبری), studio shows and tactical talks (ویدیوکست فوتبالی، کارشناسی داوری), field-side training of Iranian teams, domestic fan reactions.
+2. REJECT ONLY FOREIGN / AFC BROADCASTS (is_safe = false):
+   - European club matches/goals (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
+   - AFC Champions League Elite / ACL Two match broadcasts.
+   - Exact duplicate of a video already in RECENTLY UPLOADED VIDEOS.
 
 Output ONLY a raw JSON array of objects, one for each input "id":
 [
@@ -238,37 +239,43 @@ Output ONLY a raw JSON array of objects, one for each input "id":
 ]
 """
 
-    for model_name in models:
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
-        }
+        chunk_success = False
+        for model_name in models:
+            if chunk_success:
+                break
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
+            }
 
-        for attempt in range(2):
-            try:
-                print(f"Sending batch of {len(items_payload)} videos to AI ({model_name})...")
-                res = requests.post(api_url, json=payload, timeout=25)
-                if res.status_code == 200:
-                    raw_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-                    results_list = json.loads(raw_text)
-                    results_map = {}
-                    for r in results_list:
-                        if isinstance(r, dict) and 'id' in r:
-                            results_map[r['id']] = r
-                    print(f"Successfully audited {len(results_map)} videos in 1 batch call!")
-                    return results_map
-                elif res.status_code in [429, 503]:
-                    print(f"Model {model_name} busy (HTTP {res.status_code}), retrying in 4s...")
-                    time.sleep(4)
-                else:
-                    break
-            except Exception as e:
-                print(f"Batch call exception on {model_name}: {e}")
-                time.sleep(2)
+            for attempt in range(2):
+                try:
+                    print(f"Sending batch of {len(items_payload)} videos to AI ({model_name})...")
+                    res = requests.post(api_url, json=payload, timeout=25)
+                    if res.status_code == 200:
+                        raw_text = res.json()['candidates'][0]['content']['parts'][0]['text']
+                        results_list = json.loads(raw_text)
+                        for r in results_list:
+                            if isinstance(r, dict) and 'id' in r:
+                                all_results_map[r['id']] = r
+                        print(f"Successfully audited {len(results_list)} videos!")
+                        chunk_success = True
+                        break
+                    elif res.status_code in [429, 503]:
+                        print(f"Model {model_name} busy (HTTP {res.status_code}), retrying in 4s...")
+                        time.sleep(4)
+                    else:
+                        break
+                except Exception as e:
+                    print(f"Batch call exception on {model_name}: {e}")
+                    time.sleep(2)
 
-    print("All AI models were busy or unavailable. Will retry on next scheduled run.")
-    return None
+        if not chunk_success:
+            print("AI models busy on this chunk. Will retry remaining items on next run.")
+            break
+
+    return all_results_map if all_results_map else None
 
 def get_or_create_playlist(youtube, playlist_title):
     if playlist_title in PLAYLIST_CACHE:
@@ -324,44 +331,52 @@ def add_to_playlist(youtube, video_id, playlist_id):
                 print("Note: Could not add to playlist:", str(e))
 
 def scrape_website_videos():
-    url = "https://footballi.net/video"
+    """Scrapes pages 1, 2, and 3 of footballi.net/video so no match summary is ever missed."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        res = requests.get(url, headers=headers, timeout=15)
-        if res.status_code != 200:
-            return []
-    except Exception as e:
-        print(f"Could not load footballi.net/video: {e}")
-        return []
-
-    soup = BeautifulSoup(res.text, 'html.parser')
     videos = []
 
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if '/video/' in href:
-            parts = [p for p in href.split('/video/')[1].split('/') if p]
-            if not parts or not parts[0].isdigit():
-                continue
-            
-            video_id = parts[0]
-            raw_text = a.text
-            duration_hint = extract_duration_seconds(raw_text)
-            title = clean_title(raw_text)
-            if len(title) < 5:
-                continue
+    urls_to_check = [
+        "https://footballi.net/video",
+        "https://footballi.net/video?page=2",
+        "https://footballi.net/video?page=3"
+    ]
 
-            full_url = href if href.startswith('http') else 'https://footballi.net' + href
+    for url in urls_to_check:
+        try:
+            res = requests.get(url, headers=headers, timeout=15)
+            if res.status_code != 200:
+                continue
+        except Exception as e:
+            print(f"Could not load {url}: {e}")
+            continue
 
-            if not any(v['id'] == f"web_{video_id}" for v in videos):
-                videos.append({
-                    'id': f"web_{video_id}",
-                    'raw_id': video_id,
-                    'title': title,
-                    'duration_hint': duration_hint,
-                    'page_url': full_url,
-                    'source': 'website'
-                })
+        soup = BeautifulSoup(res.text, 'html.parser')
+
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if '/video/' in href:
+                parts = [p for p in href.split('/video/')[1].split('/') if p]
+                if not parts or not parts[0].isdigit():
+                    continue
+                
+                video_id = parts[0]
+                raw_text = a.text
+                duration_hint = extract_duration_seconds(raw_text)
+                title = clean_title(raw_text)
+                if len(title) < 5:
+                    continue
+
+                full_url = href if href.startswith('http') else 'https://footballi.net' + href
+
+                if not any(v['id'] == f"web_{video_id}" for v in videos):
+                    videos.append({
+                        'id': f"web_{video_id}",
+                        'raw_id': video_id,
+                        'title': title,
+                        'duration_hint': duration_hint,
+                        'page_url': full_url,
+                        'source': 'website'
+                    })
     return videos
 
 def scrape_telegram_shorts():
@@ -449,7 +464,7 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
         'snippet': {
             'title': title[:100],
             'description': description,
-            'tags': ['فوتبالی', 'فوتبال ایران', 'Shorts', 'لیگ برتر', 'استقلال', 'پرسپولیس'],
+            'tags': ['فوتبالی', 'فوتبال ایران', 'خلاصه بازی', 'لیگ برتر', 'استقلال', 'پرسپولیس', 'سپاهان', 'تراکتور'],
             'categoryId': '17'
         },
         'status': {
@@ -490,6 +505,9 @@ def process_pipeline():
     website_videos = scrape_website_videos()
     telegram_shorts = scrape_telegram_shorts()
 
+    # Prioritize Match Summaries ("خلاصه بازی") at the very top of the queue!
+    website_videos.sort(key=lambda x: 0 if 'خلاصه بازی' in x['title'] else 1)
+
     all_items = website_videos + telegram_shorts
 
     candidates = []
@@ -498,7 +516,7 @@ def process_pipeline():
             continue
         candidates.append(it)
 
-    print(f"Found {len(all_items)} total videos ({len(candidates)} not in local ID history)")
+    print(f"Found {len(all_items)} total videos across pages ({len(candidates)} new candidates)")
     if not candidates:
         return
 
@@ -567,7 +585,7 @@ def process_pipeline():
 
         print(f"Downloading {item['source']} stream to verify dimensions & duration...")
         try:
-            with requests.get(mp4_url, stream=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=30) as r:
+            with requests.get(mp4_url, stream=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=45) as r:
                 with open(video_filename, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024*1024):
                         f.write(chunk)
@@ -577,24 +595,29 @@ def process_pipeline():
                 os.remove(video_filename)
             continue
 
-        # Inspect actual video resolution and length using ffprobe
         width, height, duration = inspect_video_file(video_filename)
         if duration == 0 and item.get('duration_hint'):
             duration = float(item['duration_hint'])
 
         is_vertical_or_square = (height >= width and width > 0)
         is_youtube_short = is_vertical_or_square and (0 < duration <= MAX_SHORT_VIDEO_SECONDS)
+        is_match_summary = ('خلاصه بازی' in item['eval_title'] or category == 'خلاصه بازی‌ها')
 
-        print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Is Short: {is_youtube_short}")
+        print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Short: {is_youtube_short} | Match Summary: {is_match_summary}")
 
-        # STRICT RULE: If NOT a vertical Short, it MUST be at least 5 minutes (300 seconds)
-        if not is_youtube_short and duration < MIN_LONG_VIDEO_SECONDS:
-            print(f"-> SKIP DURATION: Horizontal video is under 5 minutes ({int(duration)}s < 300s). Not a Short and too short for standard YouTube.")
-            if os.path.exists(video_filename):
-                os.remove(video_filename)
-            history.append(item['id'])
-            save_history(history)
-            continue
+        # Duration Policy:
+        # 1. Match Summaries ("خلاصه بازی") are allowed if >= 90 seconds (so 3-4 min highlights are never skipped!)
+        # 2. Vertical Shorts are allowed if <= 180 seconds
+        # 3. Other horizontal videos must be >= 300 seconds (5 minutes)
+        if not is_youtube_short:
+            min_required = MIN_SUMMARY_VIDEO_SECONDS if is_match_summary else MIN_LONG_VIDEO_SECONDS
+            if duration < min_required:
+                print(f"-> SKIP DURATION: Horizontal video is too short ({int(duration)}s < {min_required}s).")
+                if os.path.exists(video_filename):
+                    os.remove(video_filename)
+                history.append(item['id'])
+                save_history(history)
+                continue
 
         if is_youtube_short and '#Shorts' not in clean_title_text and '#shorts' not in clean_title_text:
             if len(clean_title_text) < 90:
