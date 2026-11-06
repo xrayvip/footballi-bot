@@ -330,17 +330,18 @@ def add_to_playlist(youtube, video_id, playlist_id):
 
 def scrape_website_videos(history):
     """
-    1. Scrapes visible links on /video and homepage.
-    2. Also scans the last 35 sequential video IDs backward from the latest ID so
-       older match summaries pushed off the top 10 are NEVER missed!
+    Scrapes the video hub, homepage, and dedicated Iranian domestic league pages
+    so domestic match summaries ("خلاصه بازی") are NEVER pushed off by short clips!
     """
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     videos = []
-    max_id_found = 0
 
     urls_to_check = [
         "https://footballi.net/video",
-        "https://footballi.net/"
+        "https://footballi.net/",
+        "https://footballi.net/competition/1",   # لیگ برتر ایران
+        "https://footballi.net/competition/90",  # لیگ آزادگان
+        "https://footballi.net/competition/91"   # جام حذفی ایران
     ]
 
     for url in urls_to_check:
@@ -362,10 +363,6 @@ def scrape_website_videos(history):
                     continue
                 
                 video_id = parts[0]
-                vid_num = int(video_id)
-                if vid_num > max_id_found:
-                    max_id_found = vid_num
-
                 raw_text = a.text
                 duration_hint = extract_duration_seconds(raw_text)
                 title = clean_title(raw_text)
@@ -383,36 +380,6 @@ def scrape_website_videos(history):
                         'page_url': full_url,
                         'source': 'website'
                     })
-
-    # Sequential ID lookback: scan the previous 35 video IDs to catch buried match summaries!
-    if max_id_found > 0:
-        print(f"Latest website video ID is {max_id_found}. Scanning previous 35 IDs for buried match summaries...")
-        for check_id in range(max_id_found - 1, max_id_found - 36, -1):
-            str_id = str(check_id)
-            prefixed_id = f"web_{str_id}"
-            if prefixed_id in history or str_id in history:
-                continue
-            if any(v['id'] == prefixed_id for v in videos):
-                continue
-
-            probe_url = f"https://footballi.net/video/{str_id}"
-            try:
-                r = requests.get(probe_url, headers=headers, timeout=10)
-                if r.status_code == 200:
-                    s = BeautifulSoup(r.text, 'html.parser')
-                    og_t = s.find('meta', property='og:title')
-                    title = og_t['content'].strip() if og_t and og_t.get('content') else ""
-                    if title and len(title) > 5:
-                        videos.append({
-                            'id': prefixed_id,
-                            'raw_id': str_id,
-                            'title': title,
-                            'duration_hint': None,
-                            'page_url': probe_url,
-                            'source': 'website'
-                        })
-            except Exception:
-                continue
 
     return videos
 
