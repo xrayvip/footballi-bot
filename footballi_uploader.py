@@ -19,8 +19,8 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 # Minimum duration for general horizontal videos: 5 minutes (300 seconds)
 MIN_LONG_VIDEO_SECONDS = 300
-# Minimum duration for Match Summaries (خلاصه بازی): 90 seconds
-MIN_SUMMARY_VIDEO_SECONDS = 90
+# Minimum duration for Match Summaries (خلاصه بازی): 60 seconds
+MIN_SUMMARY_VIDEO_SECONDS = 60
 # Maximum duration for vertical YouTube Shorts: 3 minutes (180 seconds)
 MAX_SHORT_VIDEO_SECONDS = 180
 
@@ -222,7 +222,7 @@ STRICT AUDIT RULES:
 2. REJECT ONLY FOREIGN / AFC BROADCASTS (is_safe = false):
    - European club matches/goals (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
    - AFC Champions League Elite / ACL Two match broadcasts.
-   - Foreign player AI edits or foreign clips (e.g. Ronaldo, Messi, Foreign leagues).
+   - Foreign player edits or foreign clips.
    - Exact duplicate of a video already in RECENTLY UPLOADED VIDEOS.
 
 Output ONLY a raw JSON array of objects, one for each input "id":
@@ -328,10 +328,15 @@ def add_to_playlist(youtube, video_id, playlist_id):
             else:
                 print("Note: Could not add to playlist:", str(e))
 
-def scrape_website_videos():
-    """Scrapes both the main homepage and /video hub to catch all match summaries and clips."""
+def scrape_website_videos(history):
+    """
+    1. Scrapes visible links on /video and homepage.
+    2. Also scans the last 35 sequential video IDs backward from the latest ID so
+       older match summaries pushed off the top 10 are NEVER missed!
+    """
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     videos = []
+    max_id_found = 0
 
     urls_to_check = [
         "https://footballi.net/video",
@@ -357,6 +362,10 @@ def scrape_website_videos():
                     continue
                 
                 video_id = parts[0]
+                vid_num = int(video_id)
+                if vid_num > max_id_found:
+                    max_id_found = vid_num
+
                 raw_text = a.text
                 duration_hint = extract_duration_seconds(raw_text)
                 title = clean_title(raw_text)
@@ -374,6 +383,37 @@ def scrape_website_videos():
                         'page_url': full_url,
                         'source': 'website'
                     })
+
+    # Sequential ID lookback: scan the previous 35 video IDs to catch buried match summaries!
+    if max_id_found > 0:
+        print(f"Latest website video ID is {max_id_found}. Scanning previous 35 IDs for buried match summaries...")
+        for check_id in range(max_id_found - 1, max_id_found - 36, -1):
+            str_id = str(check_id)
+            prefixed_id = f"web_{str_id}"
+            if prefixed_id in history or str_id in history:
+                continue
+            if any(v['id'] == prefixed_id for v in videos):
+                continue
+
+            probe_url = f"https://footballi.net/video/{str_id}"
+            try:
+                r = requests.get(probe_url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    s = BeautifulSoup(r.text, 'html.parser')
+                    og_t = s.find('meta', property='og:title')
+                    title = og_t['content'].strip() if og_t and og_t.get('content') else ""
+                    if title and len(title) > 5:
+                        videos.append({
+                            'id': prefixed_id,
+                            'raw_id': str_id,
+                            'title': title,
+                            'duration_hint': None,
+                            'page_url': probe_url,
+                            'source': 'website'
+                        })
+            except Exception:
+                continue
+
     return videos
 
 def scrape_telegram_shorts():
@@ -502,9 +542,10 @@ def process_pipeline():
     history = load_history()
     existing_yt_titles = get_existing_youtube_titles(youtube)
 
-    website_videos = scrape_website_videos()
+    website_videos = scrape_website_videos(history)
     telegram_shorts = scrape_telegram_shorts()
 
+    # Always process Match Summaries ("خلاصه بازی") first!
     website_videos.sort(key=lambda x: 0 if 'خلاصه بازی' in x['title'] else 1)
 
     all_items = website_videos + telegram_shorts
@@ -515,7 +556,7 @@ def process_pipeline():
             continue
         candidates.append(it)
 
-    print(f"Found {len(all_items)} total videos across pages ({len(candidates)} new candidates)")
+    print(f"Found {len(all_items)} total videos ({len(candidates)} new candidates)")
     if not candidates:
         return
 
