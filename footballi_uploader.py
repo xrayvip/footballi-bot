@@ -3,6 +3,7 @@ import json
 import time
 import re
 import subprocess
+from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 import requests
 from bs4 import BeautifulSoup
@@ -18,12 +19,19 @@ DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 APIFY_TOKEN = os.environ.get('APIFY_TOKEN', '').strip()
 
-# Minimum duration for general horizontal videos: 5 minutes (300 seconds)
+# Duration rules
 MIN_LONG_VIDEO_SECONDS = 300
-# Minimum duration for Match Summaries (خلاصه بازی): 60 seconds
 MIN_SUMMARY_VIDEO_SECONDS = 60
-# Maximum duration for vertical YouTube Shorts: 3 minutes (180 seconds)
 MAX_SHORT_VIDEO_SECONDS = 180
+
+# Daily Quota & Slot Reservation Settings
+DAILY_CHANNEL_LIMIT = 10
+RESERVED_SUMMARY_SLOTS = 3
+MAX_NON_SUMMARY_PER_24H = DAILY_CHANNEL_LIMIT - RESERVED_SUMMARY_SLOTS  # 7 non-summaries max; 3 slots reserved for Match Summaries!
+MAX_REELS_PER_RUN = 3
+
+# Apify Cost Saver: Only call Apify once every 8 hours (3 times/day = $0.06/day = $1.80/month, staying 100% inside the free $5 credit!)
+APIFY_COOLDOWN_HOURS = 8
 
 PLAYLIST_CACHE = {}
 WORKING_MODELS = []
@@ -59,6 +67,32 @@ def save_history(history):
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
+def should_run_apify(history):
+    """Checks if at least 8 hours have passed since the last Apify call to save credits."""
+    now_ts = int(time.time())
+    last_apify_ts = 0
+    for entry in history:
+        if isinstance(entry, str) and entry.startswith("apify_ts_"):
+            try:
+                ts = int(entry.replace("apify_ts_", ""))
+                if ts > last_apify_ts:
+                    last_apify_ts = ts
+            except Exception:
+                pass
+
+    elapsed_hours = (now_ts - last_apify_ts) / 3600.0
+    if elapsed_hours < APIFY_COOLDOWN_HOURS:
+        remaining = round(APIFY_COOLDOWN_HOURS - elapsed_hours, 1)
+        print(f"[APIFY COST SAVER] Last Instagram check was {round(elapsed_hours, 1)}h ago. Next check in {remaining}h (keeps monthly cost under $1.80).")
+        return False
+    return True
+
+def record_apify_run(history):
+    """Updates the Apify timestamp in history."""
+    history[:] = [x for x in history if not (isinstance(x, str) and x.startswith("apify_ts_"))]
+    history.append(f"apify_ts_{int(time.time())}")
+    save_history(history)
+
 def normalize_persian(text):
     if not text:
         return ""
@@ -85,13 +119,17 @@ def is_duplicate_title(candidate_title, existing_titles):
             return True
     return False
 
-def get_existing_youtube_titles(youtube):
+def get_channel_status_and_24h_count(youtube):
     titles = []
+    uploads_last_24h = 0
+    now_utc = datetime.now(timezone.utc)
+    cutoff_24h = now_utc - timedelta(hours=24)
+
     try:
         ch_res = youtube.channels().list(part='contentDetails', mine=True).execute()
         items = ch_res.get('items', [])
         if not items:
-            return titles
+            return titles, 0
         uploads_playlist_id = items[0]['contentDetails']['relatedPlaylists']['uploads']
 
         next_page = None
@@ -103,15 +141,27 @@ def get_existing_youtube_titles(youtube):
                 pageToken=next_page
             ).execute()
             for item in pl_res.get('items', []):
-                t = item['snippet']['title']
+                snippet = item['snippet']
+                t = snippet['title']
                 titles.append(t)
+
+                pub_str = snippet.get('publishedAt')
+                if pub_str:
+                    try:
+                        pub_dt = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
+                        if pub_dt >= cutoff_24h:
+                            uploads_last_24h += 1
+                    except Exception:
+                        pass
+
             next_page = pl_res.get('nextPageToken')
             if not next_page:
                 break
-        print(f"Loaded {len(titles)} existing videos from YouTube channel for duplicate protection.")
+
+        print(f"Channel Status: {len(titles)} recent videos | {uploads_last_24h}/{DAILY_CHANNEL_LIMIT} uploaded in last 24h (3 slots reserved for Match Summaries).")
     except Exception as e:
         print("Note: Could not fetch existing YouTube videos list:", str(e))
-    return titles
+    return titles, uploads_last_24h
 
 def extract_duration_seconds(raw_text):
     match = re.search(r'(\d+):(\d+)', raw_text)
@@ -330,14 +380,14 @@ def add_to_playlist(youtube, video_id, playlist_id):
                 print("Note: Could not add to playlist:", str(e))
 
 def scrape_website_videos():
-    """Scrapes website video hub, homepage, and dedicated domestic league pages."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     videos = []
 
     urls_to_check = [
         "https://footballi.net/video",
         "https://footballi.net/",
-        "https://footballi.net/competition/1",   # لیگ برتر ایران
+        "https://footballi.net/competition/14",  # لیگ برتر خلیج فارس
+        "https://footballi.net/competition/1",
         "https://footballi.net/competition/90",  # لیگ آزادگان
         "https://footballi.net/competition/91"   # جام حذفی ایران
     ]
@@ -380,23 +430,26 @@ def scrape_website_videos():
                     })
     return videos
 
-def scrape_instagram_reels():
-    """Fetches the latest vertical Reels from @footballiapp on Instagram via Apify."""
+def scrape_instagram_reels(history):
     if not APIFY_TOKEN:
         print("Note: APIFY_TOKEN not set, skipping Instagram Reels.")
+        return []
+
+    if not should_run_apify(history):
         return []
 
     print("Fetching latest vertical Reels from Instagram (@footballiapp)...")
     api_url = f"https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
     payload = {
         "username": ["footballiapp"],
-        "resultsLimit": 6
+        "resultsLimit": MAX_REELS_PER_RUN
     }
 
     reels = []
     try:
         res = requests.post(api_url, json=payload, timeout=90)
         if res.status_code in [200, 201]:
+            record_apify_run(history)
             items = res.json()
             for item in items:
                 video_url = item.get('videoUrl')
@@ -505,15 +558,25 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
 def process_pipeline():
     youtube = get_youtube_service()
     history = load_history()
-    existing_yt_titles = get_existing_youtube_titles(youtube)
+    existing_yt_titles, uploads_last_24h = get_channel_status_and_24h_count(youtube)
 
     website_videos = scrape_website_videos()
-    instagram_reels = scrape_instagram_reels()
 
-    # Prioritize Match Summaries ("خلاصه بازی") first, then Instagram Reels, then long website shows
-    website_videos.sort(key=lambda x: 0 if 'خلاصه بازی' in x['title'] else 1)
+    if uploads_last_24h < MAX_NON_SUMMARY_PER_24H:
+        instagram_reels = scrape_instagram_reels(history)
+    else:
+        print(f"[RESERVE GUARD] {uploads_last_24h} videos uploaded in last 24h. Skipping Instagram Reels to keep {RESERVED_SUMMARY_SLOTS} slots reserved strictly for Match Summaries!")
+        instagram_reels = []
+
+    def priority_sort_key(item):
+        if 'خلاصه بازی' in item['title']:
+            return 0  # VIP Priority 1: Match Summaries
+        if item['source'] == 'website':
+            return 1  # Priority 2: Long-form Website Shows
+        return 2      # Priority 3: Instagram Reels
 
     all_items = website_videos + instagram_reels
+    all_items.sort(key=priority_sort_key)
 
     candidates = []
     for it in all_items:
@@ -527,14 +590,17 @@ def process_pipeline():
 
     new_items = []
     for item in candidates:
+        is_summary_hint = ('خلاصه بازی' in item['title'])
+
+        if not is_summary_hint and uploads_last_24h >= MAX_NON_SUMMARY_PER_24H:
+            continue
+
         if item['source'] == 'instagram':
             item['mp4_url'] = item.get('direct_mp4')
             item['thumb_url'] = None
             item['context_text'] = item.get('caption', '')
             item['eval_title'] = item['title']
         else:
-            # Fast pre-filter for website videos: if duration_hint is known (< 300s) and NOT a match summary, skip before page fetch!
-            is_summary_hint = ('خلاصه بازی' in item['title'])
             if not is_summary_hint and item.get('duration_hint') and item['duration_hint'] < MIN_LONG_VIDEO_SECONDS:
                 print(f"[FAST SKIP] Website horizontal clip under 5 mins ({item['duration_hint']}s): {item['title']}")
                 history.append(item['id'])
@@ -556,7 +622,7 @@ def process_pipeline():
         new_items.append(item)
 
     if not new_items:
-        print("No new eligible videos to audit.")
+        print("No new eligible videos to audit right now.")
         return
 
     audit_results = ai_batch_evaluate(new_items, existing_yt_titles)
@@ -584,6 +650,12 @@ def process_pipeline():
             print(f"-> SKIP DUPLICATE: '{clean_title_text}' already uploaded in this session.")
             history.append(item['id'])
             save_history(history)
+            continue
+
+        is_match_summary = ('خلاصه بازی' in item['eval_title'] or category == 'خلاصه بازی‌ها')
+
+        if not is_match_summary and uploads_last_24h >= MAX_NON_SUMMARY_PER_24H:
+            print(f"-> [RESERVE GUARD] Holding back '{clean_title_text}' because {uploads_last_24h}/{DAILY_CHANNEL_LIMIT} daily slots are used. Last {RESERVED_SUMMARY_SLOTS} slots are strictly reserved for Match Summaries!")
             continue
 
         mp4_url = item.get('mp4_url')
@@ -614,7 +686,6 @@ def process_pipeline():
 
         is_vertical_or_square = (height >= width and width > 0) or (item['source'] == 'instagram')
         is_youtube_short = is_vertical_or_square and (0 < duration <= MAX_SHORT_VIDEO_SECONDS)
-        is_match_summary = ('خلاصه بازی' in item['eval_title'] or category == 'خلاصه بازی‌ها')
 
         print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Short: {is_youtube_short} | Match Summary: {is_match_summary}")
 
@@ -642,7 +713,6 @@ def process_pipeline():
             except Exception:
                 pass
 
-        # Use full Instagram caption in description if from Instagram
         extra_caption = f"\n{item.get('caption', '')}\n" if item['source'] == 'instagram' else ""
         description = (
             f"{clean_title_text}\n"
@@ -675,8 +745,9 @@ def process_pipeline():
             save_history(history)
             existing_yt_titles.append(clean_title_text)
             existing_yt_titles.append(item['eval_title'])
+            uploads_last_24h += 1
 
-            print("Done. Pausing 15 seconds before next video...")
+            print(f"Done. Daily Counter: {uploads_last_24h}/{DAILY_CHANNEL_LIMIT}. Pausing 15 seconds...")
             time.sleep(15)
 
         except Exception as e:
