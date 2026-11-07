@@ -30,7 +30,7 @@ RESERVED_SUMMARY_SLOTS = 3
 MAX_NON_SUMMARY_PER_24H = DAILY_CHANNEL_LIMIT - RESERVED_SUMMARY_SLOTS  # 7 non-summaries max; 3 slots reserved for Match Summaries!
 MAX_REELS_PER_RUN = 3
 
-# Apify Cost Saver: Only call Apify once every 8 hours (3 times/day = $0.06/day = $1.80/month, staying 100% inside the free $5 credit!)
+# Apify Cost Saver: Only call Apify once every 8 hours (stays 100% inside the free $5 credit)
 APIFY_COOLDOWN_HOURS = 8
 
 PLAYLIST_CACHE = {}
@@ -68,7 +68,6 @@ def save_history(history):
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 def should_run_apify(history):
-    """Checks if at least 8 hours have passed since the last Apify call to save credits."""
     now_ts = int(time.time())
     last_apify_ts = 0
     for entry in history:
@@ -88,7 +87,6 @@ def should_run_apify(history):
     return True
 
 def record_apify_run(history):
-    """Updates the Apify timestamp in history."""
     history[:] = [x for x in history if not (isinstance(x, str) and x.startswith("apify_ts_"))]
     history.append(f"apify_ts_{int(time.time())}")
     save_history(history)
@@ -703,7 +701,8 @@ def process_pipeline():
             if len(clean_title_text) < 90:
                 clean_title_text = f"{clean_title_text} #Shorts"
 
-        print(f"-> APPROVED FOR UPLOAD: Playlist '{category}' | Short: {is_youtube_short} | Title: '{clean_title_text}'")
+        target_playlist_name = 'ویدیوهای کوتاه (Shorts)' if is_youtube_short else category
+        print(f"-> APPROVED FOR UPLOAD: Playlist '{target_playlist_name}' | Short: {is_youtube_short} | Title: '{clean_title_text}'")
 
         if thumb_url and not is_youtube_short:
             try:
@@ -733,12 +732,9 @@ def process_pipeline():
                 thumb_filename if (not is_youtube_short and os.path.exists(thumb_filename)) else None
             )
 
-            playlist_id = get_or_create_playlist(youtube, category)
+            # Strictly separate playlists: Shorts ONLY go to 'ویدیوهای کوتاه (Shorts)', Long videos ONLY go to their topic playlist!
+            playlist_id = get_or_create_playlist(youtube, target_playlist_name)
             add_to_playlist(youtube, video_id, playlist_id)
-
-            if is_youtube_short:
-                shorts_playlist_id = get_or_create_playlist(youtube, 'ویدیوهای کوتاه (Shorts)')
-                add_to_playlist(youtube, video_id, shorts_playlist_id)
 
             history.append(item['id'])
             history.append(item['raw_id'])
