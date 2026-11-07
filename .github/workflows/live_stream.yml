@@ -3,47 +3,46 @@ name: Footballi Live Match Streamer
 on:
   workflow_dispatch:
     inputs:
-      match_title:
-        description: 'عنوان بازی (مثلا: پخش زنده بازی استقلال و تراکتور)'
-        required: true
-        default: 'پخش زنده لیگ برتر ایران | Footballi Live'
       channel_source:
-        description: 'شبکه پخش کننده (tv3 یا varzesh یا لینک مستقیم m3u8)'
+        description: 'منبع پخش (tv3 برای شبکه سه، varzesh برای شبکه ورزش، یا لینک اختصاصی m3u8)'
         required: true
         default: 'tv3'
       duration_minutes:
-        description: 'مدت زمان پخش زنده به دقیقه (مثلا 130 دقیقه برای یک بازی کامل)'
+        description: 'مدت زمان لایو به دقیقه (مثلاً 5 برای تست یا 130 برای بازی کامل)'
         required: true
-        default: '130'
+        default: '5'
 
 jobs:
-  live-stream:
+  start-live:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Start YouTube Live Stream
+      - name: Stream to YouTube Live
         env:
           STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
           SOURCE: ${{ github.event.inputs.channel_source }}
           DURATION_MIN: ${{ github.event.inputs.duration_minutes }}
         run: |
           if [ "$SOURCE" = "tv3" ]; then
-            # لینک پخش زنده شبکه سه
-            STREAM_URL="https://lenz.splus.ir/PLTV/88888888/224/3221226845/index.m3u8"
+            # سرور فعال و بدون تحریم شبکه سه
+            STREAM_URL="https://af.ayas.ir/hls2/tv3.m3u8"
           elif [ "$SOURCE" = "varzesh" ]; then
-            # لینک پخش زنده شبکه ورزش
-            STREAM_URL="https://lenz.splus.ir/PLTV/88888888/224/3221226872/index.m3u8"
+            # سرور فعال و بدون تحریم شبکه ورزش
+            STREAM_URL="https://af.ayas.ir/hls2/varzesh.m3u8"
           else
             STREAM_URL="$SOURCE"
           fi
 
           DURATION_SEC=$((DURATION_MIN * 60))
-          echo "Starting Live Stream for $DURATION_MIN minutes..."
+          echo "Starting broadcast from $STREAM_URL for $DURATION_MIN minutes..."
 
-          ffmpeg -re -i "$STREAM_URL" \
-            -c:v copy -c:a aac -b:a 128k -ar 44100 \
+          ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -headers "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n" \
+            -i "$STREAM_URL" \
+            -c:v copy \
+            -c:a aac -b:a 128k -ar 44100 \
             -t "$DURATION_SEC" \
             -f flv "rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY"
