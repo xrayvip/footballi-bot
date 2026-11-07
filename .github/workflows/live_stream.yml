@@ -1,85 +1,86 @@
-name: Footballi Live Match Streamer
+name: YouTube Live Streamer
 
 on:
   workflow_dispatch:
     inputs:
-      source_type:
-        description: 'منبع استریم (footballi برای پخش زنده خود سایت فوتبالی، یا custom برای وارد کردن لینک m3u8 دستی)'
+      stream_title:
+        description: 'عنوان پخش زنده (Live Title)'
         required: true
-        default: 'footballi'
-      custom_url:
-        description: 'اگر منبع custom است، لینک مستقیم m3u8 را اینجا پیست کنید (در غیر این صورت خالی بگذارید)'
-        required: false
-        default: ''
+        default: 'پخش زنده مسابقه فوتبال | Football Live Stream'
+      stream_url:
+        description: 'لینک مستقیم استریم (Direct m3u8 URL)'
+        required: true
       duration_minutes:
-        description: 'مدت زمان پخش زنده به دقیقه (مثلا 130 دقیقه برای یک بازی کامل)'
+        description: 'مدت زمان پخش به دقیقه (Duration in Minutes)'
         required: true
         default: '130'
 
 jobs:
-  start-live:
+  live_stream:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
-      - name: Install FFmpeg & Python Dependencies
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg & Libraries
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install requests beautifulsoup4
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
-      - name: Resolve Stream URL and Broadcast to YouTube
+      - name: Update YouTube Live Title
         env:
-          STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
-          SOURCE_TYPE: ${{ github.event.inputs.source_type }}
-          CUSTOM_URL: ${{ github.event.inputs.custom_url }}
-          DURATION_MIN: ${{ github.event.inputs.duration_minutes }}
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+          STREAM_TITLE: ${{ inputs.stream_title }}
         run: |
           python3 -c "
-          import os, re, requests, subprocess
-          from bs4 import BeautifulSoup
-
-          source_type = os.environ.get('SOURCE_TYPE', 'footballi')
-          custom_url = os.environ.get('CUSTOM_URL', '').strip()
-          stream_key = os.environ.get('STREAM_KEY', '').strip()
-          duration_sec = int(os.environ.get('DURATION_MIN', '130')) * 60
-
-          stream_url = ''
-
-          if custom_url:
-              stream_url = custom_url
-              print(f'Using custom stream URL: {stream_url}')
-          else:
-              print('Scanning footballi.net/live for active live streams...')
-              headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+          import os, json
+          token_str = os.environ.get('YOUTUBE_TOKEN')
+          title = os.environ.get('STREAM_TITLE')
+          if token_str and title:
               try:
-                  res = requests.get('https://footballi.net/live', headers=headers, timeout=15)
-                  html = res.text
-                  # Search for .m3u8 live stream URLs in page source
-                  m3u8_links = re.findall(r'https?://[^\s\"\'<>]+\.m3u8[^\s\"\'<>]*', html)
-                  for l in m3u8_links:
-                      if 'oddrun' in l or 'cdnboks' in l or 'footballi' in l:
-                          stream_url = l
-                          break
-                  if not stream_url and m3u8_links:
-                      stream_url = m3u8_links[0]
+                  from google.oauth2.credentials import Credentials
+                  from googleapiclient.discovery import build
+                  creds = Credentials.from_authorized_user_info(json.loads(token_str))
+                  youtube = build('youtube', 'v3', credentials=creds)
+                  res = youtube.liveBroadcasts().list(part='snippet', broadcastStatus='all', maxResults=5).execute()
+                  items = res.get('items', [])
+                  if items:
+                      b_id = items[0]['id']
+                      snippet = items[0]['snippet']
+                      snippet['title'] = title
+                      youtube.liveBroadcasts().update(part='snippet', body={'id': b_id, 'snippet': snippet}).execute()
+                      print(f'✅ عنوان لایو یوتیوب بروزرسانی شد: {title}')
+                  else:
+                      print('ℹ️ لایو پیش‌ساخته در API یافت نشد؛ عنوان را می‌توانید در استودیو یوتیوب نیز بازبینی کنید.')
               except Exception as e:
-                  print(f'Error fetching live page: {e}')
-
-          if not stream_url:
-              print('No active stream found on footballi.net/live right now (matches usually go live 10 minutes before kickoff).')
-              exit(1)
-
-          print(f'Found active stream: {stream_url}')
-          print(f'Broadcasting to YouTube Live for {duration_sec} seconds...')
-
-          cmd = [
-              'ffmpeg',
-              '-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
-              '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n',
-              '-i', stream_url,
-              '-c:v', 'copy',
-              '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
-              '-t', str(duration_sec),
-              '-f', 'flv', f'rtmp://a.rtmp.youtube.com/live2/{stream_key}'
-          ]
-          subprocess.run(cmd)
+                  print(f'نکته عنوان: {e}')
           "
+
+      - name: Stream to YouTube Live
+        env:
+          STREAM_URL: ${{ inputs.stream_url }}
+          DURATION_MINUTES: ${{ inputs.duration_minutes }}
+          YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+        run: |
+          echo "=========================================="
+          echo "Starting Stream to YouTube Live..."
+          echo "Title: ${{ inputs.stream_title }}"
+          echo "Duration: $DURATION_MINUTES minutes"
+          echo "=========================================="
+
+          # تبدیل دقیقه به ثانیه
+          DURATION_SEC=$(( DURATION_MINUTES * 60 ))
+
+          # اجرای استریم مستقیم با کیفیت اصلی بدون افت فریم
+          ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -i "$STREAM_URL" \
+            -t "$DURATION_SEC" \
+            -c:v copy \
+            -c:a aac -b:a 128k -ar 44100 \
+            -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
