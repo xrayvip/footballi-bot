@@ -16,6 +16,7 @@ SCOPES = ['https://www.googleapis.com/auth/youtube']
 HISTORY_FILE = 'uploaded_matches.json'
 DEFAULT_PRIVACY = 'public'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+APIFY_TOKEN = os.environ.get('APIFY_TOKEN', '').strip()
 
 # Minimum duration for general horizontal videos: 5 minutes (300 seconds)
 MIN_LONG_VIDEO_SECONDS = 300
@@ -196,13 +197,14 @@ def ai_batch_evaluate(items_to_audit, existing_yt_titles):
         for it in chunk:
             items_payload.append({
                 "id": it['id'],
+                "source": it['source'],
                 "title": it['eval_title'],
-                "context": it['context_text'][:200]
+                "context": it['context_text'][:250]
             })
 
         prompt = f"""
 You are the Chief YouTube Copyright & Content Auditor for Footballi (فوتبالی).
-Audit this batch of {len(items_payload)} candidate videos.
+Audit this batch of {len(items_payload)} candidate videos from our Website and Instagram Reels.
 
 RECENTLY UPLOADED VIDEOS ON OUR CHANNEL:
 {json.dumps(recent_channel_titles, ensure_ascii=False)}
@@ -212,17 +214,16 @@ CANDIDATE VIDEOS TO AUDIT:
 
 STRICT AUDIT RULES:
 
-1. ALWAYS APPROVE IRANIAN DOMESTIC FOOTBALL (is_safe = true):
-   - ALWAYS APPROVE match summaries ("خلاصه بازی"), goals, highlights, interviews, press conferences, referee analysis, and sidelines from Iranian domestic competitions:
-     * Persian Gulf Pro League (لیگ برتر ایران / خلیج فارس) - e.g., پرسپولیس، استقلال، سپاهان، تراکتور، گل‌گهر، ملوان، فولاد، ذوب‌آهن، شمس‌آذر، آلومینیوم، چادرملو، خیبر، مس رفسنجان، نساجی، هوادار، استقلال خوزستان، فجرسپاسی، پیکان، صنعت نفت و غیره.
+1. ALWAYS APPROVE IRANIAN DOMESTIC FOOTBALL & ORIGINAL REELS (is_safe = true):
+   - ALWAYS APPROVE match summaries ("خلاصه بازی"), goals, interviews, press conferences, referee analysis, sidelines, and vertical Instagram Reels covering Iranian football:
+     * Persian Gulf Pro League (لیگ برتر ایران / خلیج فارس) - e.g., پرسپولیس، استقلال، سپاهان، تراکتور، گل‌گهر، ملوان، فولاد، ذوب‌آهن، شمس‌آذر، آلومینیوم، چادرملو، خیبر، مس رفسنجان، نساجی و غیره.
      * Azadegan League (لیگ آزادگان) & Hazfi Cup (جام حذفی ایران).
-     * Iranian Women's Football/Futsal & Iran National Team interviews/analysis.
-     * Studio shows, podcasts ("ویدیوکست", "شب‌های فوتبالی"), and referee reviews ("کارشناسی داوری").
+     * Iranian Women's Football/Futsal & Iran National Team interviews/analysis/sidelines.
+     * Studio shows, podcasts ("ویدیوکست", "شب‌های فوتبالی"), referee reviews ("کارشناسی داوری"), and Footballi original social edits/interviews.
 
 2. REJECT ONLY FOREIGN / AFC BROADCASTS (is_safe = false):
-   - European club matches/goals (UEFA Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
-   - AFC Champions League Elite / ACL Two match broadcasts.
-   - Foreign player edits or foreign clips.
+   - Raw European club match broadcasts/goals (UEFA Champions League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
+   - Raw AFC Champions League Elite / ACL Two match broadcasts.
    - Exact duplicate of a video already in RECENTLY UPLOADED VIDEOS.
 
 Output ONLY a raw JSON array of objects, one for each input "id":
@@ -232,7 +233,7 @@ Output ONLY a raw JSON array of objects, one for each input "id":
     "is_safe": true or false,
     "reason": "Short reason in English",
     "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-    "clean_title": "Clean Persian title without emojis or noise"
+    "clean_title": "Clean, engaging Persian title (max 75 chars, no emojis or hashtags)"
   }}
 ]
 """
@@ -328,11 +329,8 @@ def add_to_playlist(youtube, video_id, playlist_id):
             else:
                 print("Note: Could not add to playlist:", str(e))
 
-def scrape_website_videos(history):
-    """
-    Scrapes the video hub, homepage, and dedicated Iranian domestic league pages
-    so domestic match summaries ("خلاصه بازی") are NEVER pushed off by short clips!
-    """
+def scrape_website_videos():
+    """Scrapes website video hub, homepage, and dedicated domestic league pages."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     videos = []
 
@@ -380,55 +378,55 @@ def scrape_website_videos(history):
                         'page_url': full_url,
                         'source': 'website'
                     })
-
     return videos
 
-def scrape_telegram_shorts():
-    url = "https://t.me/s/FootballiApp"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        res = requests.get(url, headers=headers, timeout=15)
-        if res.status_code != 200:
-            return []
-    except Exception as e:
-        print(f"Could not load t.me/s/FootballiApp: {e}")
+def scrape_instagram_reels():
+    """Fetches the latest vertical Reels from @footballiapp on Instagram via Apify."""
+    if not APIFY_TOKEN:
+        print("Note: APIFY_TOKEN not set, skipping Instagram Reels.")
         return []
 
-    soup = BeautifulSoup(res.text, 'html.parser')
-    shorts = []
+    print("Fetching latest vertical Reels from Instagram (@footballiapp)...")
+    api_url = f"https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+    payload = {
+        "username": ["footballiapp"],
+        "resultsLimit": 6
+    }
 
-    for msg in soup.find_all('div', class_='tgme_widget_message'):
-        post_id = msg.get('data-post')
-        if not post_id:
-            continue
+    reels = []
+    try:
+        res = requests.post(api_url, json=payload, timeout=90)
+        if res.status_code in [200, 201]:
+            items = res.json()
+            for item in items:
+                video_url = item.get('videoUrl')
+                if not video_url:
+                    continue
 
-        video_tag = msg.find('video')
-        if not video_tag or not video_tag.get('src'):
-            continue
+                short_code = item.get('shortCode') or item.get('id') or str(int(time.time()))
+                caption = item.get('caption') or "ویدیو کوتاه اختصاصی فوتبالی"
+                first_line = caption.split('\n')[0][:85].strip()
+                title = first_line if len(first_line) > 5 else "ریلز اختصاصی فوتبالی"
+                duration = float(item.get('videoDuration') or 45.0)
 
-        mp4_url = video_tag['src']
-        dur_el = msg.find('time', class_='tgme_widget_message_video_duration')
-        dur_hint = extract_duration_seconds(dur_el.text) if dur_el else None
+                if not any(r['id'] == f"ig_{short_code}" for r in reels):
+                    reels.append({
+                        'id': f"ig_{short_code}",
+                        'raw_id': short_code,
+                        'title': title,
+                        'duration_hint': duration,
+                        'page_url': item.get('url') or f"https://www.instagram.com/reel/{short_code}/",
+                        'direct_mp4': video_url,
+                        'caption': caption,
+                        'source': 'instagram'
+                    })
+            print(f"Found {len(reels)} vertical Reels on Instagram (@footballiapp).")
+        else:
+            print(f"Apify Instagram API returned status {res.status_code}: {res.text[:120]}")
+    except Exception as e:
+        print("Instagram scraper notice:", str(e))
 
-        text_el = msg.find('div', class_='tgme_widget_message_text')
-        caption = text_el.text.strip() if text_el else "ویدیو کوتاه فوتبالی"
-        
-        first_line = caption.split('\n')[0][:90].strip()
-        clean_name = clean_title(first_line)
-
-        clean_post_id = post_id.replace('/', '_')
-        if not any(s['id'] == f"tg_{clean_post_id}" for s in shorts):
-            shorts.append({
-                'id': f"tg_{clean_post_id}",
-                'raw_id': clean_post_id,
-                'title': clean_name if len(clean_name) > 5 else "ویدیو کوتاه اختصاصی فوتبالی",
-                'duration_hint': dur_hint,
-                'page_url': f"https://t.me/{post_id}",
-                'direct_mp4': mp4_url,
-                'caption': caption,
-                'source': 'telegram'
-            })
-    return shorts
+    return reels
 
 def extract_website_video_details(video_page_url):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -471,7 +469,7 @@ def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=Non
         'snippet': {
             'title': title[:100],
             'description': description,
-            'tags': ['فوتبالی', 'فوتبال ایران', 'خلاصه بازی', 'لیگ برتر', 'استقلال', 'پرسپولیس', 'سپاهان', 'تراکتور'],
+            'tags': ['فوتبالی', 'فوتبال ایران', 'Shorts', 'خلاصه بازی', 'لیگ برتر', 'استقلال', 'پرسپولیس', 'سپاهان', 'تراکتور'],
             'categoryId': '17'
         },
         'status': {
@@ -509,13 +507,13 @@ def process_pipeline():
     history = load_history()
     existing_yt_titles = get_existing_youtube_titles(youtube)
 
-    website_videos = scrape_website_videos(history)
-    telegram_shorts = scrape_telegram_shorts()
+    website_videos = scrape_website_videos()
+    instagram_reels = scrape_instagram_reels()
 
-    # Always process Match Summaries ("خلاصه بازی") first!
+    # Prioritize Match Summaries ("خلاصه بازی") first, then Instagram Reels, then long website shows
     website_videos.sort(key=lambda x: 0 if 'خلاصه بازی' in x['title'] else 1)
 
-    all_items = website_videos + telegram_shorts
+    all_items = website_videos + instagram_reels
 
     candidates = []
     for it in all_items:
@@ -523,18 +521,26 @@ def process_pipeline():
             continue
         candidates.append(it)
 
-    print(f"Found {len(all_items)} total videos ({len(candidates)} new candidates)")
+    print(f"Found {len(all_items)} total items ({len(candidates)} new candidates)")
     if not candidates:
         return
 
     new_items = []
     for item in candidates:
-        if item['source'] == 'telegram':
+        if item['source'] == 'instagram':
             item['mp4_url'] = item.get('direct_mp4')
             item['thumb_url'] = None
             item['context_text'] = item.get('caption', '')
             item['eval_title'] = item['title']
         else:
+            # Fast pre-filter for website videos: if duration_hint is known (< 300s) and NOT a match summary, skip before page fetch!
+            is_summary_hint = ('خلاصه بازی' in item['title'])
+            if not is_summary_hint and item.get('duration_hint') and item['duration_hint'] < MIN_LONG_VIDEO_SECONDS:
+                print(f"[FAST SKIP] Website horizontal clip under 5 mins ({item['duration_hint']}s): {item['title']}")
+                history.append(item['id'])
+                save_history(history)
+                continue
+
             mp4_url, thumb_url, clean_page_title, context_text = extract_website_video_details(item['page_url'])
             item['mp4_url'] = mp4_url
             item['thumb_url'] = thumb_url
@@ -550,7 +556,7 @@ def process_pipeline():
         new_items.append(item)
 
     if not new_items:
-        print("All candidate videos already exist on the channel.")
+        print("No new eligible videos to audit.")
         return
 
     audit_results = ai_batch_evaluate(new_items, existing_yt_titles)
@@ -606,7 +612,7 @@ def process_pipeline():
         if duration == 0 and item.get('duration_hint'):
             duration = float(item['duration_hint'])
 
-        is_vertical_or_square = (height >= width and width > 0)
+        is_vertical_or_square = (height >= width and width > 0) or (item['source'] == 'instagram')
         is_youtube_short = is_vertical_or_square and (0 < duration <= MAX_SHORT_VIDEO_SECONDS)
         is_match_summary = ('خلاصه بازی' in item['eval_title'] or category == 'خلاصه بازی‌ها')
 
@@ -636,8 +642,11 @@ def process_pipeline():
             except Exception:
                 pass
 
+        # Use full Instagram caption in description if from Instagram
+        extra_caption = f"\n{item.get('caption', '')}\n" if item['source'] == 'instagram' else ""
         description = (
-            f"{clean_title_text}\n\n"
+            f"{clean_title_text}\n"
+            f"{extra_caption}\n"
             f"برای مشاهده نتایج زنده، اخبار و ویدیوهای بیشتر به وبسایت فوتبالی مراجعه کنید:\n"
             f"https://footballi.net/\n\n"
             f"دانلود اپلیکیشن فوتبالی:\n"
