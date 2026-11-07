@@ -1,28 +1,132 @@
-- name: Stream to YouTube Live
+name: YouTube Live Streamer
+
+on:
+  workflow_dispatch:
+    inputs:
+      stream_title:
+        description: 'عنوان پخش زنده (Live Title)'
+        required: true
+        default: 'پخش زنده مسابقه فوتبال | Football Live Stream'
+      stream_url:
+        description: 'لینک مستقیم استریم (Direct m3u8 URL)'
+        required: true
+      duration_minutes:
+        description: 'مدت زمان پخش به دقیقه (Duration in Minutes)'
+        required: true
+        default: '130'
+
+jobs:
+  live_stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg & Libraries
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: Update YouTube Live Title
+        env:
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+          STREAM_TITLE: ${{ inputs.stream_title }}
+        run: |
+          python3 -c "
+          import os, json
+          token_str = os.environ.get('YOUTUBE_TOKEN', '').strip()
+          title = os.environ.get('STREAM_TITLE', '').strip()
+          if token_str and title:
+              try:
+                  from google.oauth2.credentials import Credentials
+                  from googleapiclient.discovery import build
+                  creds = Credentials.from_authorized_user_info(json.loads(token_str))
+                  youtube = build('youtube', 'v3', credentials=creds)
+                  res = youtube.liveBroadcasts().list(part='snippet,status', broadcastStatus='all', maxResults=10).execute()
+                  items = res.get('items', [])
+                  updated = False
+                  for item in items:
+                      status = item.get('status', {}).get('lifeCycleStatus', '')
+                      if status in ['ready', 'testing', 'live', 'created']:
+                          b_id = item['id']
+                          snippet = item['snippet']
+                          snippet['title'] = title
+                          youtube.liveBroadcasts().update(part='snippet', body={'id': b_id, 'snippet': snippet}).execute()
+                          print(f'✅ عنوان لایو یوتیوب با موفقیت بروزرسانی شد: {title}')
+                          updated = True
+                          break
+                  if not updated and items:
+                      b_id = items[0]['id']
+                      snippet = items[0]['snippet']
+                      snippet['title'] = title
+                      youtube.liveBroadcasts().update(part='snippet', body={'id': b_id, 'snippet': snippet}).execute()
+                      print(f'✅ عنوان لایو بروزرسانی شد: {title}')
+              except Exception as e:
+                  print(f'ℹ️ نکته در تغییر خودکار عنوان: {e}')
+          "
+
+      - name: Stream to YouTube Live
         env:
           STREAM_URL: ${{ inputs.stream_url }}
           DURATION_MINUTES: ${{ inputs.duration_minutes }}
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
-          # پاکسازی خودکار فاصله‌ها و کاراکترهای اضافی از ابتدا و انتهای لینک
-          CLEAN_URL=$(echo "$STREAM_URL" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'\'']//' -e 's/["'\'']$//')
-          CLEAN_KEY=$(echo "$YOUTUBE_STREAM_KEY" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-          CLEAN_DURATION=$(echo "$DURATION_MINUTES" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          python3 -c "
+          import os, subprocess, sys
 
-          echo "=========================================="
-          echo "Starting Stream to YouTube Live..."
-          echo "Title: ${{ inputs.stream_title }}"
-          echo "Cleaned URL: $CLEAN_URL"
-          echo "Duration: $CLEAN_DURATION minutes"
-          echo "=========================================="
+          # پاکسازی کامل فاصله‌ها، کوتیشن‌ها و کاراکترهای مخفی از ورودی‌ها
+          raw_url = os.environ.get('STREAM_URL', '')
+          clean_url = raw_url.strip().strip('\"').strip(\"'\").strip()
 
-          # محاسبه مدت زمان به ثانیه
-          DURATION_SEC=$(( CLEAN_DURATION * 60 ))
+          raw_key = os.environ.get('YOUTUBE_STREAM_KEY', '')
+          clean_key = raw_key.strip().strip('\"').strip(\"'\").strip()
 
-          # اجرای استریم پایدار با اتصال مجدد خودکار در صورت نوسان نت
-          ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            -i "$CLEAN_URL" \
-            -t "$DURATION_SEC" \
-            -c:v copy \
-            -c:a aac -b:a 128k -ar 44100 \
-            -f flv "rtmp://a.rtmp.youtube.com/live2/$CLEAN_KEY"
+          raw_dur = os.environ.get('DURATION_MINUTES', '130').strip()
+          try:
+              duration_min = int(float(raw_dur))
+          except ValueError:
+              duration_min = 130
+          duration_sec = duration_min * 60
+
+          if not clean_url:
+              print('❌ خطا: لینک استریم خالی است!')
+              sys.exit(1)
+          if not clean_key:
+              print('❌ خطا: YOUTUBE_STREAM_KEY در سکرت‌های گیت‌هاب تنظیم نشده است!')
+              sys.exit(1)
+
+          print('==========================================')
+          print('🚀 Starting Stream to YouTube Live...')
+          print(f'🔗 Stream URL: {clean_url}')
+          print(f'⏱️ Duration: {duration_min} minutes ({duration_sec} seconds)')
+          print('==========================================')
+
+          rtmp_target = f'rtmp://a.rtmp.youtube.com/live2/{clean_key}'
+
+          cmd = [
+              'ffmpeg',
+              '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              '-reconnect', '1',
+              '-reconnect_at_eof', '1',
+              '-reconnect_streamed', '1',
+              '-reconnect_delay_max', '5',
+              '-i', clean_url,
+              '-t', str(duration_sec),
+              '-c:v', 'copy',
+              '-c:a', 'aac',
+              '-b:a', '128k',
+              '-ar', '44100',
+              '-f', 'flv',
+              rtmp_target
+          ]
+
+          sys.stdout.flush()
+          proc = subprocess.run(cmd)
+          sys.exit(proc.returncode)
+          "
