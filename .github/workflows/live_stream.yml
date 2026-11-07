@@ -3,46 +3,83 @@ name: Footballi Live Match Streamer
 on:
   workflow_dispatch:
     inputs:
-      channel_source:
-        description: 'منبع پخش (tv3 برای شبکه سه، varzesh برای شبکه ورزش، یا لینک اختصاصی m3u8)'
+      source_type:
+        description: 'منبع استریم (footballi برای پخش زنده خود سایت فوتبالی، یا custom برای وارد کردن لینک m3u8 دستی)'
         required: true
-        default: 'tv3'
+        default: 'footballi'
+      custom_url:
+        description: 'اگر منبع custom است، لینک مستقیم m3u8 را اینجا پیست کنید (در غیر این صورت خالی بگذارید)'
+        required: false
+        default: ''
       duration_minutes:
-        description: 'مدت زمان لایو به دقیقه (مثلاً 5 برای تست یا 130 برای بازی کامل)'
+        description: 'مدت زمان پخش زنده به دقیقه (مثلا 130 دقیقه برای یک بازی کامل)'
         required: true
-        default: '5'
+        default: '130'
 
 jobs:
   start-live:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg & Python Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install requests beautifulsoup4
 
-      - name: Stream to YouTube Live
+      - name: Resolve Stream URL and Broadcast to YouTube
         env:
           STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
-          SOURCE: ${{ github.event.inputs.channel_source }}
+          SOURCE_TYPE: ${{ github.event.inputs.source_type }}
+          CUSTOM_URL: ${{ github.event.inputs.custom_url }}
           DURATION_MIN: ${{ github.event.inputs.duration_minutes }}
         run: |
-          if [ "$SOURCE" = "tv3" ]; then
-            # سرور فعال و بدون تحریم شبکه سه
-            STREAM_URL="https://af.ayas.ir/hls2/tv3.m3u8"
-          elif [ "$SOURCE" = "varzesh" ]; then
-            # سرور فعال و بدون تحریم شبکه ورزش
-            STREAM_URL="https://af.ayas.ir/hls2/varzesh.m3u8"
-          else
-            STREAM_URL="$SOURCE"
-          fi
+          python3 -c "
+          import os, re, requests, subprocess
+          from bs4 import BeautifulSoup
 
-          DURATION_SEC=$((DURATION_MIN * 60))
-          echo "Starting broadcast from $STREAM_URL for $DURATION_MIN minutes..."
+          source_type = os.environ.get('SOURCE_TYPE', 'footballi')
+          custom_url = os.environ.get('CUSTOM_URL', '').strip()
+          stream_key = os.environ.get('STREAM_KEY', '').strip()
+          duration_sec = int(os.environ.get('DURATION_MIN', '130')) * 60
 
-          ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            -headers "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n" \
-            -i "$STREAM_URL" \
-            -c:v copy \
-            -c:a aac -b:a 128k -ar 44100 \
-            -t "$DURATION_SEC" \
-            -f flv "rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY"
+          stream_url = ''
+
+          if custom_url:
+              stream_url = custom_url
+              print(f'Using custom stream URL: {stream_url}')
+          else:
+              print('Scanning footballi.net/live for active live streams...')
+              headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+              try:
+                  res = requests.get('https://footballi.net/live', headers=headers, timeout=15)
+                  html = res.text
+                  # Search for .m3u8 live stream URLs in page source
+                  m3u8_links = re.findall(r'https?://[^\s\"\'<>]+\.m3u8[^\s\"\'<>]*', html)
+                  for l in m3u8_links:
+                      if 'oddrun' in l or 'cdnboks' in l or 'footballi' in l:
+                          stream_url = l
+                          break
+                  if not stream_url and m3u8_links:
+                      stream_url = m3u8_links[0]
+              except Exception as e:
+                  print(f'Error fetching live page: {e}')
+
+          if not stream_url:
+              print('No active stream found on footballi.net/live right now (matches usually go live 10 minutes before kickoff).')
+              exit(1)
+
+          print(f'Found active stream: {stream_url}')
+          print(f'Broadcasting to YouTube Live for {duration_sec} seconds...')
+
+          cmd = [
+              'ffmpeg',
+              '-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+              '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n',
+              '-i', stream_url,
+              '-c:v', 'copy',
+              '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+              '-t', str(duration_sec),
+              '-f', 'flv', f'rtmp://a.rtmp.youtube.com/live2/{stream_key}'
+          ]
+          subprocess.run(cmd)
+          "
