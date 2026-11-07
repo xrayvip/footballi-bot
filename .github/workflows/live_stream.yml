@@ -1,86 +1,28 @@
-name: YouTube Live Streamer
-
-on:
-  workflow_dispatch:
-    inputs:
-      stream_title:
-        description: 'عنوان پخش زنده (Live Title)'
-        required: true
-        default: 'پخش زنده مسابقه فوتبال | Football Live Stream'
-      stream_url:
-        description: 'لینک مستقیم استریم (Direct m3u8 URL)'
-        required: true
-      duration_minutes:
-        description: 'مدت زمان پخش به دقیقه (Duration in Minutes)'
-        required: true
-        default: '130'
-
-jobs:
-  live_stream:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install FFmpeg & Libraries
-        run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
-
-      - name: Update YouTube Live Title
-        env:
-          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
-          STREAM_TITLE: ${{ inputs.stream_title }}
-        run: |
-          python3 -c "
-          import os, json
-          token_str = os.environ.get('YOUTUBE_TOKEN')
-          title = os.environ.get('STREAM_TITLE')
-          if token_str and title:
-              try:
-                  from google.oauth2.credentials import Credentials
-                  from googleapiclient.discovery import build
-                  creds = Credentials.from_authorized_user_info(json.loads(token_str))
-                  youtube = build('youtube', 'v3', credentials=creds)
-                  res = youtube.liveBroadcasts().list(part='snippet', broadcastStatus='all', maxResults=5).execute()
-                  items = res.get('items', [])
-                  if items:
-                      b_id = items[0]['id']
-                      snippet = items[0]['snippet']
-                      snippet['title'] = title
-                      youtube.liveBroadcasts().update(part='snippet', body={'id': b_id, 'snippet': snippet}).execute()
-                      print(f'✅ عنوان لایو یوتیوب بروزرسانی شد: {title}')
-                  else:
-                      print('ℹ️ لایو پیش‌ساخته در API یافت نشد؛ عنوان را می‌توانید در استودیو یوتیوب نیز بازبینی کنید.')
-              except Exception as e:
-                  print(f'نکته عنوان: {e}')
-          "
-
-      - name: Stream to YouTube Live
+- name: Stream to YouTube Live
         env:
           STREAM_URL: ${{ inputs.stream_url }}
           DURATION_MINUTES: ${{ inputs.duration_minutes }}
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
+          # پاکسازی خودکار فاصله‌ها و کاراکترهای اضافی از ابتدا و انتهای لینک
+          CLEAN_URL=$(echo "$STREAM_URL" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'\'']//' -e 's/["'\'']$//')
+          CLEAN_KEY=$(echo "$YOUTUBE_STREAM_KEY" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          CLEAN_DURATION=$(echo "$DURATION_MINUTES" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
           echo "=========================================="
           echo "Starting Stream to YouTube Live..."
           echo "Title: ${{ inputs.stream_title }}"
-          echo "Duration: $DURATION_MINUTES minutes"
+          echo "Cleaned URL: $CLEAN_URL"
+          echo "Duration: $CLEAN_DURATION minutes"
           echo "=========================================="
 
-          # تبدیل دقیقه به ثانیه
-          DURATION_SEC=$(( DURATION_MINUTES * 60 ))
+          # محاسبه مدت زمان به ثانیه
+          DURATION_SEC=$(( CLEAN_DURATION * 60 ))
 
-          # اجرای استریم مستقیم با کیفیت اصلی بدون افت فریم
+          # اجرای استریم پایدار با اتصال مجدد خودکار در صورت نوسان نت
           ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            -i "$STREAM_URL" \
+            -i "$CLEAN_URL" \
             -t "$DURATION_SEC" \
             -c:v copy \
             -c:a aac -b:a 128k -ar 44100 \
-            -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
+            -f flv "rtmp://a.rtmp.youtube.com/live2/$CLEAN_KEY"
