@@ -20,7 +20,7 @@ from googleapiclient.errors import HttpError
 # Core Configuration & Daily Quota Settings
 # ==========================================
 PROTO = "https" + "://"
-BASE_URL = PROTO + "footballi.net"
+BASE_URL = PROTO + "footballi" + ".net"
 VIDEO_LIST_URLS = [
     BASE_URL + "/video",
     BASE_URL,
@@ -102,21 +102,17 @@ def save_history(history):
 # Text & URL Sanitization
 # ==========================================
 def sanitize_url(u):
-    """Safely clean URL without breaking domain or query parameters"""
+    """Safely clean URL even if chat UI injected markdown [domain](url) anywhere"""
     if not u:
         return ""
     s = str(u).strip()
-    # If markdown link [label](actual_url) exists, replace it with actual_url
-    s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\2", s)
+    s = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", s)
     s = s.replace("[", "").replace("]", "").strip()
-    # Fix accidental duplicate scheme like https://https:// or https:////
-    s = re.sub(r"^(https?://)+", "https://", s, flags=re.IGNORECASE)
-    s = re.sub(r"^https?:////+", "https://", s, flags=re.IGNORECASE)
+    s = re.sub(r"^(https?://)+", "https" + "://", s, flags=re.IGNORECASE)
     return s
 
 
 def extract_clean_apify_token(raw_token):
-    """Extract pure Apify token even if user pasted full URL into GitHub Secret"""
     if not raw_token:
         return ""
     t = raw_token.strip()
@@ -185,7 +181,7 @@ def is_safe_by_keywords(title, tags_text=""):
 # YouTube Authentication & Quota Check
 # ==========================================
 def get_authenticated_service():
-    yt_scope = PROTO + "www.googleapis.com/auth/youtube"
+    yt_scope = PROTO + "www.googleapis" + ".com/auth/youtube"
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, [yt_scope])
@@ -325,7 +321,7 @@ Candidates:
 {json.dumps(items_payload, ensure_ascii=False)}
 """
 
-    gemini_base = PROTO + "generativelanguage.googleapis.com/v1beta"
+    gemini_base = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
     models_to_try = [
         "models/gemini-flash-lite-latest",
         "models/gemini-3.5-flash-lite",
@@ -335,7 +331,7 @@ Candidates:
 
     try:
         r_m = requests.get(
-            f"{gemini_base}/models",
+            sanitize_url(f"{gemini_base}/models"),
             params={"key": api_key},
             timeout=15
         )
@@ -356,7 +352,7 @@ Candidates:
 
     for model_name in models_to_try:
         try:
-            url = f"{gemini_base}/{model_name}:generateContent"
+            url = sanitize_url(f"{gemini_base}/{model_name}:generateContent")
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
@@ -519,7 +515,8 @@ def fetch_instagram_reels(history, existing_titles):
         return []
 
     print("[APIFY] Fetching latest Instagram Reels from @footballiapp...")
-    api_url = PROTO + "[api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items](https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items)"
+    apify_host = "api." + "apify" + ".com"
+    api_url = sanitize_url(PROTO + apify_host + "/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items")
     payload = {
         "username": ["footballiapp"],
         "resultsLimit": 6
