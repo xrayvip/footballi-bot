@@ -19,14 +19,15 @@ from googleapiclient.errors import HttpError
 # ==========================================
 # Core Configuration & Daily Quota Settings
 # ==========================================
-BASE_URL = "https://footballi.net"
+PROTO = "https" + "://"
+BASE_URL = PROTO + "footballi.net"
 VIDEO_LIST_URLS = [
-    "https://footballi.net/video",
-    "https://footballi.net",
-    "https://footballi.net/competition/14",  # Persian Gulf Pro League
-    "https://footballi.net/competition/1",   # Hazfi Cup
-    "https://footballi.net/competition/90",  # Azadegan League
-    "https://footballi.net/competition/91",  # Women's League
+    BASE_URL + "/video",
+    BASE_URL,
+    BASE_URL + "/competition/14",  # Persian Gulf Pro League
+    BASE_URL + "/competition/1",   # Hazfi Cup
+    BASE_URL + "/competition/90",  # Azadegan League
+    BASE_URL + "/competition/91",  # Women's League
 ]
 
 HISTORY_FILE = "uploaded_matches.json"
@@ -89,6 +90,9 @@ def load_history():
 
 def save_history(history):
     try:
+        # Avoid duplicate entries in history list
+        history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-1500:]
+        history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1000:]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -96,13 +100,25 @@ def save_history(history):
 
 
 # ==========================================
-# Text Normalization & Duplicate Detection
+# Text & URL Sanitization
 # ==========================================
+def sanitize_url(u):
+    """Strip any markdown link brackets/parentheses or spaces injected during copy-paste"""
+    if not u:
+        return ""
+    u = str(u).strip()
+    # If markdown format [text](url) is present, extract the actual URL
+    md_match = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\2", u)
+    md_match = md_match.replace("[", "").replace("]", "")
+    m = re.search(r"https?://[^\s\"'<>)]+", md_match)
+    return m.group(0) if m else md_match
+
+
 def clean_scraped_title(raw_title):
     if not raw_title:
         return ""
     t = re.sub(r"play_arrow\s*\d+:\d+", " ", raw_title, flags=re.IGNORECASE)
-    t = re.sub(r"(?:comment|visibility|remove_red_eye)\s*\d*", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"(?:comment|visibility|remove_red_eye)\s*[\d,]*", " ", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*\d+:\d+\s*", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
@@ -151,29 +167,17 @@ def is_safe_by_keywords(title, tags_text=""):
     return True
 
 
-def clean_url_string(u):
-    """Remove accidental markdown formatting or whitespace from URLs"""
-    if not u:
-        return ""
-    u = u.strip()
-    m = re.search(r"https?://[^\s\]\)\"'>]+", u)
-    return m.group(0) if m else u
-
-
 # ==========================================
 # YouTube Authentication & Quota Check
 # ==========================================
 def get_authenticated_service():
+    yt_scope = PROTO + "www.googleapis.com/auth/youtube"
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(
-            TOKEN_FILE, ["https://www.googleapis.com/auth/youtube"]
-        )
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, [yt_scope])
     elif os.environ.get("YOUTUBE_TOKEN"):
         token_data = json.loads(os.environ["YOUTUBE_TOKEN"])
-        creds = Credentials.from_authorized_user_info(
-            token_data, ["https://www.googleapis.com/auth/youtube"]
-        )
+        creds = Credentials.from_authorized_user_info(token_data, [yt_scope])
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -307,6 +311,7 @@ Candidates:
 {json.dumps(items_payload, ensure_ascii=False)}
 """
 
+    gemini_base = PROTO + "generativelanguage.googleapis.com/v1beta"
     models_to_try = [
         "models/gemini-flash-lite-latest",
         "models/gemini-3.5-flash-lite",
@@ -315,8 +320,10 @@ Candidates:
     ]
 
     try:
-        api_list_url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + api_key
-        r_m = requests.get(api_list_url, timeout=15)
+        r_m = requests.get(
+            sanitize_url(f"{gemini_base}/models?key={api_key}"),
+            timeout=15
+        )
         if r_m.status_code == 200:
             avail = [
                 m["name"] for m in r_m.json().get("models", [])
@@ -334,7 +341,7 @@ Candidates:
 
     for model_name in models_to_try:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+            url = sanitize_url(f"{gemini_base}/{model_name}:generateContent?key={api_key}")
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
@@ -370,7 +377,8 @@ def scrape_website_candidates(history, existing_titles):
     candidates = []
     seen_urls = set(history.get("uploaded_urls", []))
 
-    for page_url in VIDEO_LIST_URLS:
+    for raw_page_url in VIDEO_LIST_URLS:
+        page_url = sanitize_url(raw_page_url)
         try:
             resp = requests.get(page_url, headers=HEADERS, timeout=20)
             if resp.status_code != 200:
@@ -380,7 +388,7 @@ def scrape_website_candidates(history, existing_titles):
                 href = a["href"]
                 if "/video/" not in href:
                     continue
-                full_url = urljoin(BASE_URL, href).split("?")[0].rstrip("/")
+                full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
                 if full_url in seen_urls:
                     continue
 
@@ -391,10 +399,12 @@ def scrape_website_candidates(history, existing_titles):
 
                 if is_duplicate_title(clean_t, existing_titles):
                     seen_urls.add(full_url)
+                    history["uploaded_urls"].append(full_url)
                     continue
 
                 if not is_safe_by_keywords(clean_t):
                     seen_urls.add(full_url)
+                    history["uploaded_urls"].append(full_url)
                     continue
 
                 seen_urls.add(full_url)
@@ -408,12 +418,14 @@ def scrape_website_candidates(history, existing_titles):
         except Exception as e:
             print(f"[WARN] Failed scraping {page_url}: {e}")
 
+    save_history(history)
     return candidates
 
 
 def extract_video_details_from_page(page_url):
+    clean_page_url = sanitize_url(page_url)
     try:
-        resp = requests.get(page_url, headers=HEADERS, timeout=20)
+        resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
         if resp.status_code != 200:
             return None
         html = resp.text
@@ -431,7 +443,6 @@ def extract_video_details_from_page(page_url):
         mp4_matches = re.findall(r'https?://[^\s"\'<>]+\.mp4', html)
         mp4_url = None
         if mp4_matches:
-            # Prefer highest resolution if multiple MP4s exist (e.g. 1080p > 720p > 480p)
             for q in ["1080", "720", "high", "hd"]:
                 for m in mp4_matches:
                     if q in m.lower():
@@ -450,19 +461,19 @@ def extract_video_details_from_page(page_url):
         thumb_url = None
         og_img = soup.find("meta", property="og:image")
         if og_img and og_img.get("content"):
-            thumb_url = clean_url_string(og_img["content"])
+            thumb_url = sanitize_url(og_img["content"])
 
         if not mp4_url:
             return None
 
         return {
-            "mp4_url": clean_url_string(mp4_url),
+            "mp4_url": sanitize_url(mp4_url),
             "title": title,
             "tags_text": tags_text,
             "thumb_url": thumb_url
         }
     except Exception as e:
-        print(f"[WARN] Error extracting details from {page_url}: {e}")
+        print(f"[WARN] Error extracting details from {clean_page_url}: {e}")
         return None
 
 
@@ -475,8 +486,8 @@ def pick_best_instagram_video_url(item):
             key=lambda v: int(v.get("width", 0)) * int(v.get("height", 0))
         )
         if best.get("url"):
-            return clean_url_string(best["url"])
-    return clean_url_string(item.get("videoUrl") or item.get("video_url") or "")
+            return sanitize_url(best["url"])
+    return sanitize_url(item.get("videoUrl") or item.get("video_url") or "")
 
 
 def fetch_instagram_reels(history, existing_titles):
@@ -492,9 +503,12 @@ def fetch_instagram_reels(history, existing_titles):
         return []
 
     print("[APIFY] Fetching latest Instagram Reels from @footballiapp...")
-    api_host = "[https://api.apify.com](https://api.apify.com)"
-    api_path = "/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items"
-    api_url = f"{api_host}{api_path}?token={apify_token}"
+    apify_endpoint = (
+        PROTO
+        + "[api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=](https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=)"
+        + apify_token
+    )
+    api_url = sanitize_url(apify_endpoint)
     payload = {
         "username": ["footballiapp"],
         "resultsLimit": 6
@@ -525,10 +539,12 @@ def fetch_instagram_reels(history, existing_titles):
 
             if is_duplicate_title(first_line, existing_titles):
                 seen_urls.add(unique_id)
+                history["uploaded_urls"].append(unique_id)
                 continue
 
             if not is_safe_by_keywords(first_line, caption):
                 seen_urls.add(unique_id)
+                history["uploaded_urls"].append(unique_id)
                 continue
 
             reels.append({
@@ -543,6 +559,7 @@ def fetch_instagram_reels(history, existing_titles):
             if len(reels) >= MAX_REELS_PER_RUN:
                 break
 
+        save_history(history)
         print(f"[APIFY] Found {len(reels)} new candidate Reels.")
         return reels
     except Exception as e:
@@ -619,7 +636,7 @@ def enhance_short_to_1080p(input_path, width, height):
 
 
 def download_file(url, dest_path):
-    clean_u = clean_url_string(url)
+    clean_u = sanitize_url(url)
     if not clean_u:
         return False
     try:
@@ -816,7 +833,6 @@ def main():
         is_vertical = height > width
         is_short_video = is_vertical or duration <= 180
 
-        # Filter out short horizontal clips unless they are Match Summaries
         if not is_vertical and not is_sum and duration < 180:
             print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
             os.remove(video_file)
@@ -824,7 +840,6 @@ def main():
             save_history(history)
             continue
 
-        # Enhance vertical Shorts/Reels to 1080x1920 Full HD if needed
         if is_vertical:
             enhance_short_to_1080p(video_file, width, height)
 
