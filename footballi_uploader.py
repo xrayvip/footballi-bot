@@ -90,7 +90,6 @@ def load_history():
 
 def save_history(history):
     try:
-        # Avoid duplicate entries in history list
         history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-1500:]
         history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1000:]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -103,15 +102,30 @@ def save_history(history):
 # Text & URL Sanitization
 # ==========================================
 def sanitize_url(u):
-    """Strip any markdown link brackets/parentheses or spaces injected during copy-paste"""
+    """Safely clean URL without breaking domain or query parameters"""
     if not u:
         return ""
-    u = str(u).strip()
-    # If markdown format [text](url) is present, extract the actual URL
-    md_match = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\2", u)
-    md_match = md_match.replace("[", "").replace("]", "")
-    m = re.search(r"https?://[^\s\"'<>)]+", md_match)
-    return m.group(0) if m else md_match
+    s = str(u).strip()
+    # If markdown link [label](actual_url) exists, replace it with actual_url
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\2", s)
+    s = s.replace("[", "").replace("]", "").strip()
+    # Fix accidental duplicate scheme like https://https:// or https:////
+    s = re.sub(r"^(https?://)+", "https://", s, flags=re.IGNORECASE)
+    s = re.sub(r"^https?:////+", "https://", s, flags=re.IGNORECASE)
+    return s
+
+
+def extract_clean_apify_token(raw_token):
+    """Extract pure Apify token even if user pasted full URL into GitHub Secret"""
+    if not raw_token:
+        return ""
+    t = raw_token.strip()
+    m = re.search(r"(apify_api_[A-Za-z0-9]+)", t)
+    if m:
+        return m.group(1)
+    if "token=" in t:
+        return t.split("token=")[-1].split("&")[0].strip()
+    return t
 
 
 def clean_scraped_title(raw_title):
@@ -321,7 +335,8 @@ Candidates:
 
     try:
         r_m = requests.get(
-            sanitize_url(f"{gemini_base}/models?key={api_key}"),
+            f"{gemini_base}/models",
+            params={"key": api_key},
             timeout=15
         )
         if r_m.status_code == 200:
@@ -341,7 +356,7 @@ Candidates:
 
     for model_name in models_to_try:
         try:
-            url = sanitize_url(f"{gemini_base}/{model_name}:generateContent?key={api_key}")
+            url = f"{gemini_base}/{model_name}:generateContent"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
@@ -349,7 +364,7 @@ Candidates:
                     "responseMimeType": "application/json"
                 }
             }
-            resp = requests.post(url, json=payload, timeout=50)
+            resp = requests.post(url, params={"key": api_key}, json=payload, timeout=50)
             if resp.status_code == 200:
                 raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if raw_text.startswith("```"):
@@ -491,7 +506,8 @@ def pick_best_instagram_video_url(item):
 
 
 def fetch_instagram_reels(history, existing_titles):
-    apify_token = os.environ.get("APIFY_TOKEN", "").strip()
+    raw_token = os.environ.get("APIFY_TOKEN", "")
+    apify_token = extract_clean_apify_token(raw_token)
     if not apify_token:
         return []
 
@@ -503,19 +519,19 @@ def fetch_instagram_reels(history, existing_titles):
         return []
 
     print("[APIFY] Fetching latest Instagram Reels from @footballiapp...")
-    apify_endpoint = (
-        PROTO
-        + "[api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=](https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=)"
-        + apify_token
-    )
-    api_url = sanitize_url(apify_endpoint)
+    api_url = PROTO + "[api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items](https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items)"
     payload = {
         "username": ["footballiapp"],
         "resultsLimit": 6
     }
 
     try:
-        resp = requests.post(api_url, json=payload, timeout=90)
+        resp = requests.post(
+            api_url,
+            params={"token": apify_token},
+            json=payload,
+            timeout=90
+        )
         history["last_apify_run"] = time.time()
         save_history(history)
 
@@ -778,6 +794,7 @@ def main():
         pool = (summaries + reel_candidates + others)[:12]
 
     if not pool:
+        save_history(history)
         print("[IDLE] No new candidate videos found.")
         return
 
