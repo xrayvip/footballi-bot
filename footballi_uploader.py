@@ -1,764 +1,827 @@
 import os
+import re
+import sys
 import json
 import time
-import re
+import shutil
 import subprocess
 from datetime import datetime, timezone, timedelta
-from difflib import SequenceMatcher
+from urllib.parse import urljoin
+
 import requests
 from bs4 import BeautifulSoup
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
 
-SCOPES = ['https://www.googleapis.com/auth/youtube']
-HISTORY_FILE = 'uploaded_matches.json'
-DEFAULT_PRIVACY = 'public'
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
-APIFY_TOKEN = os.environ.get('APIFY_TOKEN', '').strip()
+# ==========================================
+# تنظیمات اصلی و سهمیه روزانه
+# ==========================================
+BASE_URL = "https://footballi.net"
+VIDEO_LIST_URLS = [
+    "https://footballi.net/video",
+    "https://footballi.net",
+    "https://footballi.net/competition/14",  # لیگ برتر ایران
+    "https://footballi.net/competition/1",   # جام حذفی ایران
+    "https://footballi.net/competition/90",  # لیگ آزادگان
+    "https://footballi.net/competition/91",  # لیگ برتر بانوان
+]
 
-# Duration rules
-MIN_LONG_VIDEO_SECONDS = 300
-MIN_SUMMARY_VIDEO_SECONDS = 60
-MAX_SHORT_VIDEO_SECONDS = 180
+HISTORY_FILE = "uploaded_matches.json"
+TOKEN_FILE = "token.json"
 
-# Daily Quota & Slot Reservation Settings
-DAILY_CHANNEL_LIMIT = 10
-RESERVED_SUMMARY_SLOTS = 3
-MAX_NON_SUMMARY_PER_24H = DAILY_CHANNEL_LIMIT - RESERVED_SUMMARY_SLOTS  # 7 non-summaries max; 3 slots reserved for Match Summaries!
-MAX_REELS_PER_RUN = 3
-
-# Apify Cost Saver: Only call Apify once every 8 hours (stays 100% inside the free $5 credit)
+# سقف ۳۰ ویدیو در روز (ریست راس ساعت ۱۱:۳۰ صبح به وقت ایران همگام با یوتیوب)
+MAX_DAILY_UPLOADS = 30
+RESERVED_FOR_SUMMARIES = 3
+MAX_UPLOADS_PER_RUN = 4
 APIFY_COOLDOWN_HOURS = 8
+MAX_REELS_PER_RUN = 2
 
-PLAYLIST_CACHE = {}
-WORKING_MODELS = []
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+}
 
-def get_youtube_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if os.environ.get('CI'):
-                raise RuntimeError("Invalid or expired token in cloud runner. Please refresh token.json.")
-            flow = InstalledAppFlow.from_client_secrets_file('client_secrets.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('youtube', 'v3', credentials=creds)
+# لیست سیاه کلمات خطرناک کپی‌رایت (اروپا و آسیا)
+FORBIDDEN_KEYWORDS = [
+    "لیگ قهرمانان اروپا", "لیگ نخبگان", "لیگ قهرمانان آسیا", "سطح ۲ آسیا", "سطح دو آسیا",
+    "لالیگا", "لیگ برتر انگلیس", "سری آ", "بوندسلیگا", "لیگ یک فرانسه",
+    "رئال مادرید", "بارسلونا", "منچسترسیتی", "منچستر سیتی", "منچستریونایتد", "لیورپول",
+    "آرسنال", "چلسی", "بایرن مونیخ", "دورتموند", "اینتر میلان", "یوونتوس", "آث میلان",
+    "پاری سن ژرمن", "الهلال", "النصر", "الاهلی عربستان", "الاتحاد", "السد", "العین",
+    "شباب الاهلی", "پاختاکور", "الشرطه", "الغرافه", "الوصل", "الریان",
+    "champions league", "premier league", "laliga", "serie a", "bundesliga", "uefa", "afc"
+]
 
+SUMMARY_KEYWORDS = [
+    "خلاصه بازی", "خلاصه مسابقه", "خلاصه دیدار", "گل های بازی", "گل‌های بازی"
+]
+
+
+# ==========================================
+# مدیریت فایل تاریخچه (History)
+# ==========================================
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
+                    return {
+                        "uploaded_urls": data,
+                        "uploaded_titles": [],
+                        "last_apify_run": 0
+                    }
+                if isinstance(data, dict):
+                    data.setdefault("uploaded_urls", [])
+                    data.setdefault("uploaded_titles", [])
+                    data.setdefault("last_apify_run", 0)
                     return data
-        except Exception:
-            pass
-    return []
+        except Exception as e:
+            print(f"⚠️ خطا در خواندن فایل تاریخچه: {e}")
+    return {"uploaded_urls": [], "uploaded_titles": [], "last_apify_run": 0}
+
 
 def save_history(history):
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ خطا در ذخیره تاریخچه: {e}")
 
-def should_run_apify(history):
-    now_ts = int(time.time())
-    last_apify_ts = 0
-    for entry in history:
-        if isinstance(entry, str) and entry.startswith("apify_ts_"):
-            try:
-                ts = int(entry.replace("apify_ts_", ""))
-                if ts > last_apify_ts:
-                    last_apify_ts = ts
-            except Exception:
-                pass
 
-    elapsed_hours = (now_ts - last_apify_ts) / 3600.0
-    if elapsed_hours < APIFY_COOLDOWN_HOURS:
-        remaining = round(APIFY_COOLDOWN_HOURS - elapsed_hours, 1)
-        print(f"[APIFY COST SAVER] Last Instagram check was {round(elapsed_hours, 1)}h ago. Next check in {remaining}h (keeps monthly cost under $1.80).")
-        return False
-    return True
+# ==========================================
+# نرمال‌سازی متن و تشخیص تکراری و خلاصه بازی
+# ==========================================
+def clean_scraped_title(raw_title):
+    if not raw_title:
+        return ""
+    t = re.sub(r"play_arrow\s*\d+:\d+", " ", raw_title, flags=re.IGNORECASE)
+    t = re.sub(r"^\s*\d+:\d+\s*", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
-def record_apify_run(history):
-    history[:] = [x for x in history if not (isinstance(x, str) and x.startswith("apify_ts_"))]
-    history.append(f"apify_ts_{int(time.time())}")
-    save_history(history)
 
 def normalize_persian(text):
     if not text:
         return ""
-    text = text.replace('ی', 'ی').replace('ي', 'ی').replace('ک', 'ک').replace('ك', 'ک')
-    text = text.replace('\u200c', ' ')
-    text = re.sub(r'#\S+', '', text)
-    text = re.sub(r'[^\w\s]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip().lower()
-    return text
+    t = text.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("‌", " ")
+    t = re.sub(r"#\S+", " ", t)
+    t = re.sub(r"[^\w\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip().lower()
+    return t
 
-def is_duplicate_title(candidate_title, existing_titles):
+
+def is_duplicate_title(candidate_title, existing_titles_set):
     norm_cand = normalize_persian(candidate_title)
-    if not norm_cand or len(norm_cand) < 8:
+    if not norm_cand or len(norm_cand) < 5:
         return False
-
-    for existing in existing_titles:
-        norm_ex = normalize_persian(existing)
+    cand_words = [w for w in norm_cand.split() if len(w) > 2]
+    for ex in existing_titles_set:
+        norm_ex = normalize_persian(ex)
         if not norm_ex:
             continue
-        if norm_cand == norm_ex:
+        if norm_cand == norm_ex or norm_cand in norm_ex or norm_ex in norm_cand:
             return True
-        similarity = SequenceMatcher(None, norm_cand, norm_ex).ratio()
-        if similarity >= 0.88:
-            return True
+        if len(cand_words) >= 4:
+            ex_words = set(norm_ex.split())
+            overlap = sum(1 for w in cand_words if w in ex_words)
+            if overlap / len(cand_words) >= 0.8:
+                return True
     return False
 
+
+def is_match_summary(title):
+    t = normalize_persian(title)
+    return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
+
+
+def is_safe_by_keywords(title, tags_text=""):
+    combined = normalize_persian(f"{title} {tags_text}")
+    for kw in FORBIDDEN_KEYWORDS:
+        if normalize_persian(kw) in combined:
+            print(f"⛔ رد شد (کلمه غیرمجاز '{kw}'): {title[:60]}")
+            return False
+    return True
+
+
+# ==========================================
+# احراز هویت یوتیوب و بررسی سهمیه روزانه (ریست ۱۱:۳۰ صبح ایران)
+# ==========================================
+def get_authenticated_service():
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(
+            TOKEN_FILE, ["https://www.googleapis.com/auth/youtube"]
+        )
+    elif os.environ.get("YOUTUBE_TOKEN"):
+        token_data = json.loads(os.environ["YOUTUBE_TOKEN"])
+        creds = Credentials.from_authorized_user_info(
+            token_data, ["https://www.googleapis.com/auth/youtube"]
+        )
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            raise RuntimeError("❌ توکن معتبر یوتیوب یافت نشد!")
+
+    return build("youtube", "v3", credentials=creds)
+
+
 def get_channel_status_and_24h_count(youtube):
-    titles = []
-    uploads_last_24h = 0
-    now_utc = datetime.now(timezone.utc)
-    cutoff_24h = now_utc - timedelta(hours=24)
+    """شمارش آپلودها از ساعت ۱۱:۳۰ صبح امروز (۰۸:۰۰ UTC) + استخراج عناوین و RefTitle برای عدم تکرار"""
+    existing_titles = set()
+    uploads_since_reset = 0
 
     try:
-        ch_res = youtube.channels().list(part='contentDetails', mine=True).execute()
-        items = ch_res.get('items', [])
+        now_utc = datetime.now(timezone.utc)
+        reset_time = now_utc.replace(hour=8, minute=0, second=0, microsecond=0)
+        if now_utc < reset_time:
+            reset_time -= timedelta(days=1)
+
+        ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
+        items = ch_res.get("items", [])
         if not items:
-            return titles, 0
-        uploads_playlist_id = items[0]['contentDetails']['relatedPlaylists']['uploads']
+            return existing_titles, 0
 
-        next_page = None
-        for _ in range(2):
-            pl_res = youtube.playlistItems().list(
-                part='snippet',
-                playlistId=uploads_playlist_id,
-                maxResults=50,
-                pageToken=next_page
-            ).execute()
-            for item in pl_res.get('items', []):
-                snippet = item['snippet']
-                t = snippet['title']
-                titles.append(t)
+        uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-                pub_str = snippet.get('publishedAt')
-                if pub_str:
-                    try:
-                        pub_dt = datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
-                        if pub_dt >= cutoff_24h:
-                            uploads_last_24h += 1
-                    except Exception:
-                        pass
+        pl_req = youtube.playlistItems().list(
+            part="snippet",
+            playlistId=uploads_playlist_id,
+            maxResults=50
+        )
+        pl_res = pl_req.execute()
 
-            next_page = pl_res.get('nextPageToken')
-            if not next_page:
-                break
+        for item in pl_res.get("items", []):
+            snippet = item.get("snippet", {})
+            title = snippet.get("title", "").strip()
+            desc = snippet.get("description", "")
+            pub_str = snippet.get("publishedAt", "")
 
-        print(f"Channel Status: {len(titles)} recent videos | {uploads_last_24h}/{DAILY_CHANNEL_LIMIT} uploaded in last 24h (3 slots reserved for Match Summaries).")
+            if title:
+                existing_titles.add(title)
+
+            # بازیابی عنوان اصلی ذخیره‌شده در توضیحات ویدیو
+            for line in desc.splitlines():
+                if line.strip().startswith("RefTitle:"):
+                    orig_ref = line.split("RefTitle:", 1)[1].strip()
+                    if orig_ref:
+                        existing_titles.add(orig_ref)
+
+            if pub_str:
+                pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                if pub_dt >= reset_time:
+                    uploads_since_reset += 1
+
+        print(
+            f"📊 وضعیت کانال: {len(existing_titles)} عنوان ثبت‌شده | "
+            f"آپلودها از ساعت ۱۱:۳۰ صبح امروز: {uploads_since_reset} از {MAX_DAILY_UPLOADS} "
+            f"({RESERVED_FOR_SUMMARIES} اسلات رزرو خلاصه بازی)"
+        )
+        return existing_titles, uploads_since_reset
+
     except Exception as e:
-        print("Note: Could not fetch existing YouTube videos list:", str(e))
-    return titles, uploads_last_24h
+        print(f"⚠️ خطا در خواندن لیست ویدیوهای کانال: {e}")
+        return existing_titles, 0
 
-def extract_duration_seconds(raw_text):
-    match = re.search(r'(\d+):(\d+)', raw_text)
-    if match:
-        minutes = int(match.group(1))
-        seconds = int(match.group(2))
-        return minutes * 60 + seconds
-    return None
 
-def inspect_video_file(file_path):
-    try:
-        cmd = [
-            'ffprobe', '-v', 'error',
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height,duration:format=duration',
-            '-of', 'json',
-            file_path
-        ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        data = json.loads(res.stdout)
-        streams = data.get('streams', [])
-        width = int(streams[0].get('width', 0)) if streams else 0
-        height = int(streams[0].get('height', 0)) if streams else 0
-        
-        duration = 0.0
-        if streams and 'duration' in streams[0]:
-            duration = float(streams[0]['duration'])
-        elif 'format' in data and 'duration' in data['format']:
-            duration = float(data['format']['duration'])
+# ==========================================
+# هوش مصنوعی Gemini: ممیزی کپی‌رایت + تولید تایتل و کپشن سئو شده
+# ==========================================
+def ai_batch_evaluate(candidates):
+    if not candidates:
+        return {}
 
-        return width, height, duration
-    except Exception as e:
-        print("Note: Could not run ffprobe inspection:", str(e))
-        return 0, 0, 0.0
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        print("⚠️ GEMINI_API_KEY تنظیم نشده است.")
+        return {}
 
-def clean_title(raw_text):
-    cleaned = re.sub(r'play_arrow\d*:\d*', '', raw_text)
-    cleaned = re.sub(r'visibility\s*[\d,]*', '', cleaned)
-    cleaned = re.sub(r'comment\s*[\d,]*', '', cleaned)
-    return cleaned.strip()
+    items_payload = []
+    for idx, c in enumerate(candidates):
+        items_payload.append({
+            "index": idx,
+            "title": c.get("title", ""),
+            "tags": c.get("tags", ""),
+            "source": c.get("source", "web"),
+            "is_short": c.get("is_short", False)
+        })
 
-def discover_working_models():
-    global WORKING_MODELS
-    if WORKING_MODELS:
-        return WORKING_MODELS
+    prompt = f"""
+You are an elite YouTube SEO Strategist and Copyright Auditor for the Iranian football channel 'Footballi' (فوتبالی).
 
-    candidates = [
+Analyze each candidate video below and perform TWO tasks:
+
+TASK 1 - STRICT COPYRIGHT AUDIT:
+- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League, Women's League, Iran National Team press conferences/interviews, domestic player/coach/manager interviews, refereeing analysis, studio shows, fan reactions).
+- REJECT ("safe": false):
+  1. ANY European football match highlights or broadcast footage (Champions League, LaLiga, Premier League, Serie A, Bundesliga, Real Madrid, Barcelona, Man City, etc.).
+  2. ANY AFC Champions League Elite / ACL Two / Asian Champions League match footage or highlights (even if Iranian teams like Esteghlal, Persepolis, Tractor, or Sepahan are playing!).
+
+TASK 2 - HIGH-CTR YOUTUBE SEO TITLE, DESCRIPTION & TAGS (for safe videos):
+- "seo_title": Write a captivating, high-CTR, SEO-optimized Persian YouTube title (max 85 characters).
+  * Keep exact team names, match scores, and person names accurate.
+  * Make it intriguing and clickable for Iranian football fans using 1 or 2 fitting emojis (🔥, ⚽, 🚨, 💬).
+  * If it is a match summary, start with "خلاصه بازی" and include the score + "لیگ برتر ایران".
+  * If "is_short" is true, append " #shorts" at the end of the title.
+- "seo_description": Write a structured, keyword-rich Persian description (4-5 lines):
+  * Paragraph 1: Engaging 2-sentence explanation of the video containing high-search Persian keywords (names of teams, coaches, players, stadium, league week).
+  * Paragraph 2: Call to action: "برای تماشای سریع‌ترین خلاصه بازی‌ها، حواشی داغ و مصاحبه‌های اختصاصی فوتبال ایران، کانال فوتبالی را سابسکرایب کنید، ویدیو را لایک کنید و نظرتان را در کامنت‌ها بنویسید! 🔔👍⚽"
+  * Paragraph 3: 6 to 8 relevant hashtags (e.g. #فوتبال_ایران #لیگ_برتر #فوتبالی #استقلال #پرسپولیس #تراکتور #سپاهان #خلاصه_بازی).
+- "seo_tags": A list of 10 high-traffic Persian search keywords specific to this video (e.g. team names, player names, coach names, "خلاصه بازی امروز", "فوتبالی", "لیگ برتر ایران").
+- "category": Choose the exact playlist name:
+  * "خلاصه بازی‌ها" (ONLY for match highlights/summaries)
+  * "ویدیوهای کوتاه (Shorts)" (ONLY when is_short is true)
+  * "مصاحبه و حواشی فوتبال ایران" (for interviews, news, press conferences, reactions)
+
+Return ONLY a valid JSON array with this exact schema:
+[
+  {{
+    "index": 0,
+    "safe": true,
+    "reason": "Domestic Persian Gulf Pro League content",
+    "category": "مصاحبه و حواشی فوتبال ایران",
+    "seo_title": "...",
+    "seo_description": "...",
+    "seo_tags": ["...", "..."]
+  }}
+]
+
+Candidates:
+{json.dumps(items_payload, ensure_ascii=False)}
+"""
+
+    models_to_try = [
+        "models/gemini-2.5-flash",
         "models/gemini-3.5-flash-lite",
-        "models/gemini-3.6-flash",
-        "models/gemini-3.8-flash",
-        "models/gemini-3.5-flash"
+        "models/gemini-2.0-flash",
+        "models/gemini-1.5-flash"
     ]
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            for m in res.json().get('models', []):
-                name = m.get('name', '')
-                methods = m.get('supportedGenerationMethods', [])
-                if 'generateContent' in methods and 'gemini' in name:
-                    if not any(old in name for old in ['1.5', '2.0', '2.5', 'vision', 'image', 'tts', 'embedding']):
-                        if name not in candidates:
-                            candidates.append(name)
+        r_m = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+            timeout=15
+        )
+        if r_m.status_code == 200:
+            avail = [
+                m["name"] for m in r_m.json().get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+                and "gemini" in m["name"]
+            ]
+            if avail:
+                flash_models = [m for m in avail if "flash" in m]
+                models_to_try = (flash_models + avail)[:4]
     except Exception:
         pass
 
-    WORKING_MODELS = candidates
-    return WORKING_MODELS
-
-def ai_batch_evaluate(items_to_audit, existing_yt_titles):
-    if not GEMINI_API_KEY or not items_to_audit:
-        return {}
-
-    models = discover_working_models()
-    recent_channel_titles = existing_yt_titles[:25]
-    all_results_map = {}
-
-    chunk_size = 15
-    for i in range(0, len(items_to_audit), chunk_size):
-        chunk = items_to_audit[i:i + chunk_size]
-        items_payload = []
-        for it in chunk:
-            items_payload.append({
-                "id": it['id'],
-                "source": it['source'],
-                "title": it['eval_title'],
-                "context": it['context_text'][:250]
-            })
-
-        prompt = f"""
-You are the Chief YouTube Copyright & Content Auditor for Footballi (فوتبالی).
-Audit this batch of {len(items_payload)} candidate videos from our Website and Instagram Reels.
-
-RECENTLY UPLOADED VIDEOS ON OUR CHANNEL:
-{json.dumps(recent_channel_titles, ensure_ascii=False)}
-
-CANDIDATE VIDEOS TO AUDIT:
-{json.dumps(items_payload, ensure_ascii=False, indent=2)}
-
-STRICT AUDIT RULES:
-
-1. ALWAYS APPROVE IRANIAN DOMESTIC FOOTBALL & ORIGINAL REELS (is_safe = true):
-   - ALWAYS APPROVE match summaries ("خلاصه بازی"), goals, interviews, press conferences, referee analysis, sidelines, and vertical Instagram Reels covering Iranian football:
-     * Persian Gulf Pro League (لیگ برتر ایران / خلیج فارس) - e.g., پرسپولیس، استقلال، سپاهان، تراکتور، گل‌گهر، ملوان، فولاد، ذوب‌آهن، شمس‌آذر، آلومینیوم، چادرملو، خیبر، مس رفسنجان، نساجی و غیره.
-     * Azadegan League (لیگ آزادگان) & Hazfi Cup (جام حذفی ایران).
-     * Iranian Women's Football/Futsal & Iran National Team interviews/analysis/sidelines.
-     * Studio shows, podcasts ("ویدیوکست", "شب‌های فوتبالی"), referee reviews ("کارشناسی داوری"), and Footballi original social edits/interviews.
-
-2. REJECT ONLY FOREIGN / AFC BROADCASTS (is_safe = false):
-   - Raw European club match broadcasts/goals (UEFA Champions League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1).
-   - Raw AFC Champions League Elite / ACL Two match broadcasts.
-   - Exact duplicate of a video already in RECENTLY UPLOADED VIDEOS.
-
-Output ONLY a raw JSON array of objects, one for each input "id":
-[
-  {{
-    "id": "exact input id",
-    "is_safe": true or false,
-    "reason": "Short reason in English",
-    "category": "خلاصه بازی‌ها" or "مصاحبه‌ها و نشست‌های خبری" or "برنامه‌ها و ویدیوکست‌ها" or "حواشی و تمرینات تیم‌ها" or "گل‌های فوتبال ایران" or "ویدیوهای اختصاصی فوتبالی",
-    "clean_title": "Clean, engaging Persian title (max 75 chars, no emojis or hashtags)"
-  }}
-]
-"""
-
-        chunk_success = False
-        for model_name in models:
-            if chunk_success:
-                break
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    for model_name in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
-            }
-
-            for attempt in range(2):
-                try:
-                    print(f"Sending batch of {len(items_payload)} videos to AI ({model_name})...")
-                    res = requests.post(api_url, json=payload, timeout=25)
-                    if res.status_code == 200:
-                        raw_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-                        results_list = json.loads(raw_text)
-                        for r in results_list:
-                            if isinstance(r, dict) and 'id' in r:
-                                all_results_map[r['id']] = r
-                        print(f"Successfully audited {len(results_list)} videos!")
-                        chunk_success = True
-                        break
-                    elif res.status_code in [429, 503]:
-                        print(f"Model {model_name} busy (HTTP {res.status_code}), retrying in 4s...")
-                        time.sleep(4)
-                    else:
-                        break
-                except Exception as e:
-                    print(f"Batch call exception on {model_name}: {e}")
-                    time.sleep(2)
-
-        if not chunk_success:
-            print("AI models busy on this chunk. Will retry remaining items on next run.")
-            break
-
-    return all_results_map if all_results_map else None
-
-def get_or_create_playlist(youtube, playlist_title):
-    if playlist_title in PLAYLIST_CACHE:
-        return PLAYLIST_CACHE[playlist_title]
-
-    request = youtube.playlists().list(part='snippet', mine=True, maxResults=50)
-    response = request.execute()
-
-    for item in response.get('items', []):
-        if item['snippet']['title'].strip() == playlist_title.strip():
-            playlist_id = item['id']
-            PLAYLIST_CACHE[playlist_title] = playlist_id
-            return playlist_id
-
-    create_request = youtube.playlists().insert(
-        part='snippet,status',
-        body={
-            'snippet': {
-                'title': playlist_title,
-                'description': f'ویدیوهای رسمی {playlist_title} از رسانه فوتبالی'
-            },
-            'status': {'privacyStatus': 'public'}
-        }
-    )
-    res = create_request.execute()
-    playlist_id = res['id']
-    PLAYLIST_CACHE[playlist_title] = playlist_id
-    print(f"Created new playlist: '{playlist_title}'")
-    time.sleep(2)
-    return playlist_id
-
-def add_to_playlist(youtube, video_id, playlist_id):
-    for attempt in range(2):
-        try:
-            youtube.playlistItems().insert(
-                part='snippet',
-                body={
-                    'snippet': {
-                        'playlistId': playlist_id,
-                        'resourceId': {
-                            'kind': 'youtube#video',
-                            'videoId': video_id
-                        }
-                    }
+                "generationConfig": {
+                    "temperature": 0.25,
+                    "responseMimeType": "application/json"
                 }
-            ).execute()
-            print("Added to playlist successfully.")
-            return
-        except Exception as e:
-            if attempt == 0:
-                time.sleep(3)
+            }
+            resp = requests.post(url, json=payload, timeout=50)
+            if resp.status_code == 200:
+                raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if raw_text.startswith("```"):
+                    raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+                parsed = json.loads(raw_text)
+                result_map = {}
+                for entry in parsed:
+                    idx = entry.get("index")
+                    if idx is not None:
+                        result_map[idx] = entry
+                print(f"🤖 هوش مصنوعی ({model_name}) تعداد {len(result_map)} ویدیو را بررسی و سئو کرد.")
+                return result_map
             else:
-                print("Note: Could not add to playlist:", str(e))
-
-def scrape_website_videos():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    videos = []
-
-    urls_to_check = [
-        "https://footballi.net/video",
-        "https://footballi.net/",
-        "https://footballi.net/competition/14",  # لیگ برتر خلیج فارس
-        "https://footballi.net/competition/1",
-        "https://footballi.net/competition/90",  # لیگ آزادگان
-        "https://footballi.net/competition/91"   # جام حذفی ایران
-    ]
-
-    for url in urls_to_check:
-        try:
-            res = requests.get(url, headers=headers, timeout=15)
-            if res.status_code != 200:
-                continue
+                print(f"⚠️ مدل {model_name} کد {resp.status_code} برگرداند.")
         except Exception as e:
-            print(f"Could not load {url}: {e}")
-            continue
+            print(f"⚠️ خطا در ارتباط با {model_name}: {e}")
 
-        soup = BeautifulSoup(res.text, 'html.parser')
+    return {}
 
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if '/video/' in href:
-                parts = [p for p in href.split('/video/')[1].split('/') if p]
-                if not parts or not parts[0].isdigit():
+
+# ==========================================
+# استخراج ویدیوهای سایت فوتبالی و ریلز اینستاگرام
+# ==========================================
+def scrape_website_candidates(history, existing_titles):
+    candidates = []
+    seen_urls = set(history.get("uploaded_urls", []))
+
+    for page_url in VIDEO_LIST_URLS:
+        try:
+            resp = requests.get(page_url, headers=HEADERS, timeout=20)
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/video/" not in href:
                     continue
-                
-                video_id = parts[0]
-                raw_text = a.text
-                duration_hint = extract_duration_seconds(raw_text)
-                title = clean_title(raw_text)
-                if len(title) < 5:
+                full_url = urljoin(BASE_URL, href).split("?")[0].rstrip("/")
+                if full_url in seen_urls:
                     continue
 
-                full_url = href if href.startswith('http') else 'https://footballi.net' + href
+                title_attr = a.get("title") or a.get_text(" ", strip=True)
+                clean_t = clean_scraped_title(title_attr)
+                if not clean_t or len(clean_t) < 8:
+                    continue
 
-                if not any(v['id'] == f"web_{video_id}" for v in videos):
-                    videos.append({
-                        'id': f"web_{video_id}",
-                        'raw_id': video_id,
-                        'title': title,
-                        'duration_hint': duration_hint,
-                        'page_url': full_url,
-                        'source': 'website'
-                    })
-    return videos
+                if is_duplicate_title(clean_t, existing_titles):
+                    seen_urls.add(full_url)
+                    continue
 
-def scrape_instagram_reels(history):
-    if not APIFY_TOKEN:
-        print("Note: APIFY_TOKEN not set, skipping Instagram Reels.")
+                if not is_safe_by_keywords(clean_t):
+                    seen_urls.add(full_url)
+                    continue
+
+                seen_urls.add(full_url)
+                candidates.append({
+                    "url": full_url,
+                    "title": clean_t,
+                    "source": "web",
+                    "is_short": False,
+                    "is_summary": is_match_summary(clean_t)
+                })
+        except Exception as e:
+            print(f"⚠️ خطا در اسکرپ صفحه {page_url}: {e}")
+
+    return candidates
+
+
+def extract_video_details_from_page(page_url):
+    try:
+        resp = requests.get(page_url, headers=HEADERS, timeout=20)
+        if resp.status_code != 200:
+            return None
+        html = resp.text
+        soup = BeautifulSoup(html, "html.parser")
+
+        h1 = soup.find("h1")
+        title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
+
+        tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")]
+        tags_text = " ".join(tags_list)
+
+        if not is_safe_by_keywords(title, tags_text):
+            return None
+
+        mp4_matches = re.findall(r'https?://[^\s"\'<>]+\.mp4', html)
+        mp4_url = mp4_matches[0] if mp4_matches else None
+
+        if not mp4_url:
+            vid_tag = soup.find("video")
+            if vid_tag and vid_tag.get("src"):
+                mp4_url = vid_tag["src"]
+
+        thumb_url = None
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            thumb_url = og_img["content"]
+
+        if not mp4_url:
+            return None
+
+        return {
+            "mp4_url": mp4_url,
+            "title": title,
+            "tags_text": tags_text,
+            "thumb_url": thumb_url
+        }
+    except Exception as e:
+        print(f"⚠️ خطا در استخراج صفحه ویدیو {page_url}: {e}")
+        return None
+
+
+def fetch_instagram_reels(history, existing_titles):
+    apify_token = os.environ.get("APIFY_TOKEN", "").strip()
+    if not apify_token:
         return []
 
-    if not should_run_apify(history):
+    last_run = history.get("last_apify_run", 0)
+    hours_passed = (time.time() - last_run) / 3600.0
+    if hours_passed < APIFY_COOLDOWN_HOURS:
+        rem = APIFY_COOLDOWN_HOURS - hours_passed
+        print(f"⏳ استراحت Apify برای مدیریت هزینه ({rem:.1f} ساعت تا بررسی بعدی اینستاگرام).")
         return []
 
-    print("Fetching latest vertical Reels from Instagram (@footballiapp)...")
-    api_url = f"https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+    print("📱 در حال دریافت ریلزهای جدید اینستاگرام @footballiapp از Apify...")
+    api_url = f"[https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=](https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=){apify_token}"
     payload = {
         "username": ["footballiapp"],
-        "resultsLimit": MAX_REELS_PER_RUN
+        "resultsLimit": 6
     }
 
-    reels = []
     try:
-        res = requests.post(api_url, json=payload, timeout=90)
-        if res.status_code in [200, 201]:
-            record_apify_run(history)
-            items = res.json()
-            for item in items:
-                video_url = item.get('videoUrl')
-                if not video_url:
-                    continue
+        resp = requests.post(api_url, json=payload, timeout=90)
+        history["last_apify_run"] = time.time()
+        save_history(history)
 
-                short_code = item.get('shortCode') or item.get('id') or str(int(time.time()))
-                caption = item.get('caption') or "ویدیو کوتاه اختصاصی فوتبالی"
-                first_line = caption.split('\n')[0][:85].strip()
-                title = first_line if len(first_line) > 5 else "ریلز اختصاصی فوتبالی"
-                duration = float(item.get('videoDuration') or 45.0)
+        if resp.status_code not in (200, 201):
+            print(f"⚠️ خطای Apify کد {resp.status_code}")
+            return []
 
-                if not any(r['id'] == f"ig_{short_code}" for r in reels):
-                    reels.append({
-                        'id': f"ig_{short_code}",
-                        'raw_id': short_code,
-                        'title': title,
-                        'duration_hint': duration,
-                        'page_url': item.get('url') or f"https://www.instagram.com/reel/{short_code}/",
-                        'direct_mp4': video_url,
-                        'caption': caption,
-                        'source': 'instagram'
-                    })
-            print(f"Found {len(reels)} vertical Reels on Instagram (@footballiapp).")
-        else:
-            print(f"Apify Instagram API returned status {res.status_code}: {res.text[:120]}")
-    except Exception as e:
-        print("Instagram scraper notice:", str(e))
+        items = resp.json()
+        reels = []
+        seen_urls = set(history.get("uploaded_urls", []))
 
-    return reels
+        for item in items:
+            video_url = item.get("videoUrl")
+            short_code = item.get("shortCode") or item.get("id") or video_url
+            caption = item.get("caption") or ""
+            first_line = clean_scraped_title(caption.splitlines()[0]) if caption else "ویدیوی کوتاه فوتبالی"
 
-def extract_website_video_details(video_page_url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        res = requests.get(video_page_url, headers=headers, timeout=15)
-        html = res.text
-    except Exception as e:
-        print(f"Timeout on {video_page_url}: {e}")
-        return None, None, None, ""
+            unique_id = f"ig_{short_code}"
+            if not video_url or unique_id in seen_urls:
+                continue
 
-    soup = BeautifulSoup(html, 'html.parser')
+            if is_duplicate_title(first_line, existing_titles):
+                seen_urls.add(unique_id)
+                continue
 
-    mp4_url = None
-    mp4_matches = re.findall(r'https?://[^\s"\'<>]+\.mp4[^\s"\'<>]*', html)
-    if mp4_matches:
-        for match in mp4_matches:
-            if 'cdnboks' in match or 'oddrun' in match or 'footballi' in match:
-                mp4_url = match
+            if not is_safe_by_keywords(first_line, caption):
+                seen_urls.add(unique_id)
+                continue
+
+            reels.append({
+                "url": unique_id,
+                "mp4_url": video_url,
+                "title": first_line[:90],
+                "tags": caption[:200],
+                "source": "instagram",
+                "is_short": True,
+                "is_summary": False
+            })
+            if len(reels) >= MAX_REELS_PER_RUN:
                 break
-        if not mp4_url:
-            mp4_url = mp4_matches[0]
 
-    img_tag = soup.find('meta', property='og:image')
-    thumbnail_url = img_tag['content'] if img_tag else None
+        return reels
+    except Exception as e:
+        print(f"⚠️ خطا در دریافت ریلز اینستاگرام: {e}")
+        return []
 
-    og_title = soup.find('meta', property='og:title')
-    page_title = og_title['content'] if og_title else None
 
-    tags = []
-    for tag in soup.find_all('a', href=re.compile(r'/tag/|/competition/')):
-        t_text = tag.text.strip()
-        if t_text and t_text not in tags:
-            tags.append(t_text)
-    tags_text = " - ".join(tags)
+# ==========================================
+# بررسی ابعاد و زمان ویدیو با ffprobe
+# ==========================================
+def inspect_video_file(filepath):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,duration",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            filepath
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        data = json.loads(res.stdout)
+        streams = data.get("streams", [{}])
+        width = int(streams[0].get("width", 1920))
+        height = int(streams[0].get("height", 1080))
+        dur_str = streams[0].get("duration") or data.get("format", {}).get("duration") or "0"
+        duration = float(dur_str)
+        return width, height, duration
+    except Exception as e:
+        print(f"⚠️ خطا در ffprobe: {e}")
+        return 1920, 1080, 120.0
 
-    return mp4_url, thumbnail_url, page_title, tags_text
 
-def upload_to_youtube(youtube, file_path, title, description, thumbnail_path=None):
+def download_file(url, dest_path):
+    try:
+        with requests.get(url, headers=HEADERS, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(dest_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        f.write(chunk)
+        return os.path.exists(dest_path) and os.path.getsize(dest_path) > 50_000
+    except Exception as e:
+        print(f"⚠️ خطا در دانلود فایل {url}: {e}")
+        return False
+
+
+# ==========================================
+# مدیریت پلی‌لیست‌ها و آپلود به یوتیوب
+# ==========================================
+def get_or_create_playlist(youtube, playlist_title, cache):
+    if playlist_title in cache:
+        return cache[playlist_title]
+
+    try:
+        req = youtube.playlists().list(part="snippet", mine=True, maxResults=50)
+        res = req.execute()
+        for item in res.get("items", []):
+            title = item["snippet"]["title"]
+            cache[title] = item["id"]
+            if title == playlist_title:
+                return item["id"]
+
+        body = {
+            "snippet": {
+                "title": playlist_title,
+                "description": f"مجموعه {playlist_title} در کانال رسمی فوتبالی (Footballi)"
+            },
+            "status": {"privacyStatus": "public"}
+        }
+        created = youtube.playlists().insert(part="snippet,status", body=body).execute()
+        pl_id = created["id"]
+        cache[playlist_title] = pl_id
+        return pl_id
+    except Exception as e:
+        print(f"⚠️ خطا در ساخت/یافتن پلی‌لیست '{playlist_title}': {e}")
+        return None
+
+
+def add_video_to_playlist(youtube, video_id, playlist_id):
+    if not playlist_id:
+        return
+    try:
+        body = {
+            "snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {
+                    "kind": "youtube#video",
+                    "videoId": video_id
+                }
+            }
+        }
+        youtube.playlistItems().insert(part="snippet", body=body).execute()
+        print(f"📂 ویدیو به پلی‌لیست اضافه شد.")
+    except Exception as e:
+        print(f"⚠️ خطا در افزودن به پلی‌لیست: {e}")
+
+
+def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags):
     body = {
-        'snippet': {
-            'title': title[:100],
-            'description': description,
-            'tags': ['فوتبالی', 'فوتبال ایران', 'Shorts', 'خلاصه بازی', 'لیگ برتر', 'استقلال', 'پرسپولیس', 'سپاهان', 'تراکتور'],
-            'categoryId': '17'
+        "snippet": {
+            "title": title[:100],
+            "description": description[:4900],
+            "tags": tags[:25],
+            "categoryId": "17",  # Sports
+            "defaultLanguage": "fa",
+            "defaultAudioLanguage": "fa"
         },
-        'status': {
-            'privacyStatus': DEFAULT_PRIVACY,
-            'selfDeclaredMadeForKids': False
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False
         }
     }
 
-    media = MediaFileUpload(file_path, chunksize=1024*1024*4, resumable=True, mimetype='video/mp4')
-    request = youtube.videos().insert(part=','.join(body.keys()), body=body, media_body=media)
-    
+    media = MediaFileUpload(video_path, chunksize=1024 * 1024 * 4, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
     response = None
     while response is None:
         status, response = request.next_chunk()
         if status:
-            print(f"Uploading: {int(status.progress() * 100)}%")
+            print(f"⬆️ پیشرفت آپلود: {int(status.progress() * 100)}%")
 
-    video_id = response['id']
-    print(f"Uploaded successfully! Video ID: {video_id}")
+    video_id = response["id"]
+    print(f"✅ آپلود موفق! شناسه ویدیو: [https://youtu.be/](https://youtu.be/){video_id}")
 
-    if thumbnail_path and os.path.exists(thumbnail_path):
+    if thumb_path and os.path.exists(thumb_path):
         try:
             youtube.thumbnails().set(
                 videoId=video_id,
-                media_body=MediaFileUpload(thumbnail_path, mimetype='image/jpeg')
+                media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("Thumbnail set successfully.")
+            print("🖼️ تامبنیل اختصاصی تنظیم شد.")
         except Exception as e:
-            print("Note: Could not set thumbnail:", str(e))
+            print(f"⚠️ نکته تامبنیل: {e}")
 
     return video_id
 
-def process_pipeline():
-    youtube = get_youtube_service()
+
+# ==========================================
+# اجرای اصلی برنامه
+# ==========================================
+def main():
+    print("🚀 شروع اجرای ربات هوشمند فوتبالی (مجهز به موتور سئو Gemini)...")
     history = load_history()
-    existing_yt_titles, uploads_last_24h = get_channel_status_and_24h_count(youtube)
+    youtube = get_authenticated_service()
 
-    website_videos = scrape_website_videos()
+    existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
+    for t in history.get("uploaded_titles", []):
+        existing_titles.add(t)
 
-    if uploads_last_24h < MAX_NON_SUMMARY_PER_24H:
-        instagram_reels = scrape_instagram_reels(history)
+    if uploads_today >= MAX_DAILY_UPLOADS:
+        print("🛑 سقف مجاز روزانه پر شده است. تا ساعت ۱۱:۳۰ صبح فردا صبر می‌کنیم.")
+        return
+
+    web_candidates = scrape_website_candidates(history, existing_titles)
+    reel_candidates = fetch_instagram_reels(history, existing_titles)
+
+    # اولویت اول همیشه با خلاصه بازی‌هاست
+    summaries = [c for c in web_candidates if c.get("is_summary")]
+    others = [c for c in web_candidates if not c.get("is_summary")]
+
+    non_summary_cap = MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES
+    if uploads_today >= non_summary_cap:
+        print("🔒 در منطقه رزرو خلاصه بازی‌ها هستیم! فقط خلاصه بازی آپلود می‌شود.")
+        pool = summaries[:8]
     else:
-        print(f"[RESERVE GUARD] {uploads_last_24h} videos uploaded in last 24h. Skipping Instagram Reels to keep {RESERVED_SUMMARY_SLOTS} slots reserved strictly for Match Summaries!")
-        instagram_reels = []
+        pool = (summaries + reel_candidates + others)[:12]
 
-    def priority_sort_key(item):
-        if 'خلاصه بازی' in item['title']:
-            return 0  # VIP Priority 1: Match Summaries
-        if item['source'] == 'website':
-            return 1  # Priority 2: Long-form Website Shows
-        return 2      # Priority 3: Instagram Reels
-
-    all_items = website_videos + instagram_reels
-    all_items.sort(key=priority_sort_key)
-
-    candidates = []
-    for it in all_items:
-        if it['id'] in history or it['raw_id'] in history:
-            continue
-        candidates.append(it)
-
-    print(f"Found {len(all_items)} total items ({len(candidates)} new candidates)")
-    if not candidates:
+    if not pool:
+        print("📭 ویدیوی جدیدی برای بررسی یافت نشد.")
         return
 
-    new_items = []
-    for item in candidates:
-        is_summary_hint = ('خلاصه بازی' in item['title'])
+    # غنی‌سازی اطلاعات صفحات وب قبل از ارسال به هوش مصنوعی
+    enriched_pool = []
+    for item in pool:
+        if item["source"] == "web":
+            details = extract_video_details_from_page(item["url"])
+            if not details:
+                history["uploaded_urls"].append(item["url"])
+                continue
+            item["mp4_url"] = details["mp4_url"]
+            item["title"] = details["title"] or item["title"]
+            item["tags"] = details["tags_text"]
+            item["thumb_url"] = details["thumb_url"]
+            item["is_summary"] = is_match_summary(item["title"])
+        enriched_pool.append(item)
 
-        if not is_summary_hint and uploads_last_24h >= MAX_NON_SUMMARY_PER_24H:
+    if not enriched_pool:
+        save_history(history)
+        print("📭 پس از بررسی صفحات، ویدیوی معتبری باقی نماند.")
+        return
+
+    # فراخوانی هوش مصنوعی Gemini برای کپی‌رایت + تولید تایتل و کپشن سئو شده
+    ai_results = ai_batch_evaluate(enriched_pool)
+
+    playlist_cache = {}
+    uploaded_in_this_run = 0
+
+    for idx, item in enumerate(enriched_pool):
+        if uploaded_in_this_run >= MAX_UPLOADS_PER_RUN:
+            break
+        if uploads_today >= MAX_DAILY_UPLOADS:
+            break
+
+        is_sum = item.get("is_summary", False)
+        if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
+            print(f"⏭️ عبور از '{item['title'][:40]}' (نگهداری ۳ اسلات آخر برای خلاصه بازی‌ها)")
             continue
 
-        if item['source'] == 'instagram':
-            item['mp4_url'] = item.get('direct_mp4')
-            item['thumb_url'] = None
-            item['context_text'] = item.get('caption', '')
-            item['eval_title'] = item['title']
+        ai_info = ai_results.get(idx)
+        if ai_info is not None and not ai_info.get("safe", False):
+            print(f"⛔ رد شده توسط هوش مصنوعی ({ai_info.get('reason')}): {item['title']}")
+            history["uploaded_urls"].append(item["url"])
+            save_history(history)
+            continue
+
+        video_file = f"temp_video_{idx}.mp4"
+        thumb_file = f"temp_thumb_{idx}.jpg"
+
+        if not download_file(item["mp4_url"], video_file):
+            continue
+
+        width, height, duration = inspect_video_file(video_file)
+        is_vertical = height > width
+        is_short_video = is_vertical or duration <= 180
+
+        # فیلتر ویدیوهای افقی خیلی کوتاه (به جز خلاصه بازی‌ها)
+        if not is_vertical and not is_sum and duration < 180:
+            print(f"⏩ رد شد (ویدیوی افقی کوتاه‌تر از ۳ دقیقه - {int(duration)}s): {item['title']}")
+            os.remove(video_file)
+            history["uploaded_urls"].append(item["url"])
+            save_history(history)
+            continue
+
+        original_title = item["title"]
+
+        # دریافت تایتل، کپشن و تگ‌های سئو شده از Gemini
+        if ai_info:
+            seo_title = ai_info.get("seo_title") or original_title
+            seo_desc = ai_info.get("seo_description") or original_title
+            seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
         else:
-            if not is_summary_hint and item.get('duration_hint') and item['duration_hint'] < MIN_LONG_VIDEO_SECONDS:
-                print(f"[FAST SKIP] Website horizontal clip under 5 mins ({item['duration_hint']}s): {item['title']}")
-                history.append(item['id'])
-                save_history(history)
-                continue
+            seo_title = original_title
+            seo_desc = (
+                f"{original_title}\n\n"
+                "برای تماشای سریع‌ترین خلاصه بازی‌ها و حواشی فوتبال ایران، کانال فوتبالی را سابسکرایب کنید! 🔔⚽\n"
+                "#فوتبال_ایران #لیگ_برتر #فوتبالی"
+            )
+            seo_tags = ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "ورزش"]
 
-            mp4_url, thumb_url, clean_page_title, context_text = extract_website_video_details(item['page_url'])
-            item['mp4_url'] = mp4_url
-            item['thumb_url'] = thumb_url
-            item['context_text'] = context_text
-            item['eval_title'] = clean_page_title if clean_page_title else item['title']
+        # تضمین تفکیک ۱۰۰ درصدی پلی‌لیست Shorts از ویدیوهای بلند
+        if is_short_video:
+            target_playlist = "ویدیوهای کوتاه (Shorts)"
+            if "#shorts" not in seo_title.lower():
+                seo_title = f"{seo_title[:88]} #shorts"
+            thumb_to_use = None
+        else:
+            seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
+            if is_sum:
+                target_playlist = "خلاصه بازی‌ها"
+            else:
+                target_playlist = "مصاحبه و حواشی فوتبال ایران"
 
-        if is_duplicate_title(item['eval_title'], existing_yt_titles):
-            print(f"[SKIP DUPLICATE] Already on YouTube channel: {item['eval_title']}")
-            history.append(item['id'])
-            save_history(history)
-            continue
+            thumb_to_use = None
+            if item.get("thumb_url") and download_file(item["thumb_url"], thumb_file):
+                thumb_to_use = thumb_file
 
-        new_items.append(item)
-
-    if not new_items:
-        print("No new eligible videos to audit right now.")
-        return
-
-    audit_results = ai_batch_evaluate(new_items, existing_yt_titles)
-    if audit_results is None:
-        return
-
-    for item in new_items:
-        decision = audit_results.get(item['id'])
-        if not decision:
-            continue
-
-        is_safe = decision.get('is_safe', False)
-        reason = decision.get('reason', 'No reason provided')
-        category = decision.get('category', 'ویدیوهای اختصاصی فوتبالی')
-        clean_title_text = decision.get('clean_title', item['eval_title'])
-
-        print(f"\n[AUDIT] [{item['source'].upper()}] {item['eval_title']}")
-        if not is_safe:
-            print(f"-> REJECTED BY AI: {reason}")
-            history.append(item['id'])
-            save_history(history)
-            continue
-
-        if is_duplicate_title(clean_title_text, existing_yt_titles):
-            print(f"-> SKIP DUPLICATE: '{clean_title_text}' already uploaded in this session.")
-            history.append(item['id'])
-            save_history(history)
-            continue
-
-        is_match_summary = ('خلاصه بازی' in item['eval_title'] or category == 'خلاصه بازی‌ها')
-
-        if not is_match_summary and uploads_last_24h >= MAX_NON_SUMMARY_PER_24H:
-            print(f"-> [RESERVE GUARD] Holding back '{clean_title_text}' because {uploads_last_24h}/{DAILY_CHANNEL_LIMIT} daily slots are used. Last {RESERVED_SUMMARY_SLOTS} slots are strictly reserved for Match Summaries!")
-            continue
-
-        mp4_url = item.get('mp4_url')
-        thumb_url = item.get('thumb_url')
-
-        if not mp4_url:
-            print("Could not locate video stream, skipping.")
-            continue
-
-        video_filename = f"temp_{item['raw_id']}.mp4"
-        thumb_filename = f"thumb_{item['raw_id']}.jpg"
-
-        print(f"Downloading {item['source']} stream to verify dimensions & duration...")
-        try:
-            with requests.get(mp4_url, stream=True, headers={"User-Agent": "Mozilla/5.0"}, timeout=45) as r:
-                with open(video_filename, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024):
-                        f.write(chunk)
-        except Exception as e:
-            print("Download error:", str(e), "- skipping.")
-            if os.path.exists(video_filename):
-                os.remove(video_filename)
-            continue
-
-        width, height, duration = inspect_video_file(video_filename)
-        if duration == 0 and item.get('duration_hint'):
-            duration = float(item['duration_hint'])
-
-        is_vertical_or_square = (height >= width and width > 0) or (item['source'] == 'instagram')
-        is_youtube_short = is_vertical_or_square and (0 < duration <= MAX_SHORT_VIDEO_SECONDS)
-
-        print(f"Video Specs: {width}x{height} | Duration: {int(duration)}s | Short: {is_youtube_short} | Match Summary: {is_match_summary}")
-
-        if not is_youtube_short:
-            min_required = MIN_SUMMARY_VIDEO_SECONDS if is_match_summary else MIN_LONG_VIDEO_SECONDS
-            if duration < min_required:
-                print(f"-> SKIP DURATION: Horizontal video is too short ({int(duration)}s < {min_required}s).")
-                if os.path.exists(video_filename):
-                    os.remove(video_filename)
-                history.append(item['id'])
-                save_history(history)
-                continue
-
-        if is_youtube_short and '#Shorts' not in clean_title_text and '#shorts' not in clean_title_text:
-            if len(clean_title_text) < 90:
-                clean_title_text = f"{clean_title_text} #Shorts"
-
-        target_playlist_name = 'ویدیوهای کوتاه (Shorts)' if is_youtube_short else category
-        print(f"-> APPROVED FOR UPLOAD: Playlist '{target_playlist_name}' | Short: {is_youtube_short} | Title: '{clean_title_text}'")
-
-        if thumb_url and not is_youtube_short:
-            try:
-                with requests.get(thumb_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15) as r:
-                    with open(thumb_filename, 'wb') as f:
-                        f.write(r.content)
-            except Exception:
-                pass
-
-        extra_caption = f"\n{item.get('caption', '')}\n" if item['source'] == 'instagram' else ""
-        description = (
-            f"{clean_title_text}\n"
-            f"{extra_caption}\n"
-            f"برای مشاهده نتایج زنده، اخبار و ویدیوهای بیشتر به وبسایت فوتبالی مراجعه کنید:\n"
-            f"https://footballi.net/\n\n"
-            f"دانلود اپلیکیشن فوتبالی:\n"
-            f"https://footballi.net/download\n\n"
-            f"#فوتبالی #فوتبال_ایران {'#Shorts ' if is_youtube_short else ''}#{category.replace(' ', '_')}"
+        # افزودن RefTitle در انتهای کپشن تا در اجراهای بعدی هرگز تکراری آپلود نشود
+        final_description = (
+            f"{seo_desc}\n\n"
+            f"🌐 رسانه رسمی فوتبالی | Footballi\n"
+            f"RefTitle: {original_title}"
         )
 
         try:
-            video_id = upload_to_youtube(
-                youtube, 
-                video_filename, 
-                clean_title_text, 
-                description, 
-                thumb_filename if (not is_youtube_short and os.path.exists(thumb_filename)) else None
+            print(f"🎯 آپلود با تایتل سئو شده: {seo_title}")
+            vid_id = upload_to_youtube(
+                youtube,
+                video_file,
+                thumb_to_use,
+                seo_title,
+                final_description,
+                seo_tags
             )
 
-            # Strictly separate playlists: Shorts ONLY go to 'ویدیوهای کوتاه (Shorts)', Long videos ONLY go to their topic playlist!
-            playlist_id = get_or_create_playlist(youtube, target_playlist_name)
-            add_to_playlist(youtube, video_id, playlist_id)
+            pl_id = get_or_create_playlist(youtube, target_playlist, playlist_cache)
+            add_video_to_playlist(youtube, vid_id, pl_id)
 
-            history.append(item['id'])
-            history.append(item['raw_id'])
+            history["uploaded_urls"].append(item["url"])
+            history["uploaded_titles"].append(original_title)
+            history["uploaded_titles"].append(seo_title)
             save_history(history)
-            existing_yt_titles.append(clean_title_text)
-            existing_yt_titles.append(item['eval_title'])
-            uploads_last_24h += 1
 
-            print(f"Done. Daily Counter: {uploads_last_24h}/{DAILY_CHANNEL_LIMIT}. Pausing 15 seconds...")
-            time.sleep(15)
+            existing_titles.add(original_title)
+            existing_titles.add(seo_title)
+            uploads_today += 1
+            uploaded_in_this_run += 1
 
-        except Exception as e:
-            err_msg = str(e)
-            if 'uploadLimitExceeded' in err_msg or 'quotaExceeded' in err_msg:
-                print("\n[LIMIT HIT] YouTube 24-hour upload quota reached.")
-                print("Stopping run cleanly. History is saved, and new uploads will resume on next run.")
+        except HttpError as e:
+            err_str = str(e)
+            print("Upload error:", err_str, "- skipping.")
+            if "uploadLimitExceeded" in err_str:
+                print("🛑 یوتیوب اعلام کرد سقف آپلود روزانه اکانت پر شده است. توقف اجرا.")
                 break
-            else:
-                print("Upload error:", str(e), "- skipping.")
+        except Exception as e:
+            print("Unexpected upload error:", str(e), "- skipping.")
         finally:
-            if os.path.exists(video_filename):
-                os.remove(video_filename)
-            if os.path.exists(thumb_filename):
-                os.remove(thumb_filename)
+            if os.path.exists(video_file):
+                os.remove(video_file)
+            if os.path.exists(thumb_file):
+                os.remove(thumb_file)
 
-if __name__ == '__main__':
-    process_pipeline()
+    print(f"🏁 پایان اجرا. تعداد آپلود در این نوبت: {uploaded_in_this_run}")
+
+
+if __name__ == "__main__":
+    main()
