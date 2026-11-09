@@ -29,6 +29,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y ffmpeg
           pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests
 
+      - name: Install FFmpeg & Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg fonts-vazirmatn fonts-dejavu-core
+          pip install requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow arabic-reshaper python-bidi
+
       - name: Load Google Credentials
         env:
           CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
