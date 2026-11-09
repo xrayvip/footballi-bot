@@ -42,7 +42,7 @@ jobs:
           echo "$CLIENT_SECRETS" > client_secrets.json
           echo "$YOUTUBE_TOKEN" > token.json
 
-            - name: Run Uploader Bot
+       - name: Run Uploader Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
