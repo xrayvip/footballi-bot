@@ -15,10 +15,10 @@ from config import (
     PROTO, HISTORY_FILE, TOKEN_FILE,
     MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES, MAX_UPLOADS_PER_RUN
 )
-from ai_seo import ai_batch_evaluate
+from ai_seo import ai_free_copyright_audit, arvan_generate_single_seo
 from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
-    fetch_instagram_reels, is_match_summary, is_duplicate_title
+    fetch_instagram_reels, is_match_summary
 )
 from media_utils import (
     inspect_video_file, enhance_short_to_1080p, download_file, prepare_clean_thumbnail
@@ -73,7 +73,6 @@ def get_authenticated_service():
 def get_channel_status_and_24h_count(youtube):
     existing_titles = set()
     uploads_since_reset = 0
-    channel_videos = []
 
     try:
         now_utc = datetime.now(timezone.utc)
@@ -84,7 +83,7 @@ def get_channel_status_and_24h_count(youtube):
         ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
         items = ch_res.get("items", [])
         if not items:
-            return existing_titles, 0, []
+            return existing_titles, 0
 
         uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
         pl_res = youtube.playlistItems().list(
@@ -93,7 +92,6 @@ def get_channel_status_and_24h_count(youtube):
 
         for item in pl_res.get("items", []):
             snippet = item.get("snippet", {})
-            vid_id = snippet.get("resourceId", {}).get("videoId", "")
             title = snippet.get("title", "").strip()
             desc = snippet.get("description", "")
             pub_str = snippet.get("publishedAt", "")
@@ -101,19 +99,11 @@ def get_channel_status_and_24h_count(youtube):
             if title:
                 existing_titles.add(title)
 
-            orig_ref = ""
             for line in desc.splitlines():
                 if line.strip().startswith("RefTitle:"):
                     orig_ref = line.split("RefTitle:", 1)[1].strip()
                     if orig_ref:
                         existing_titles.add(orig_ref)
-
-            if vid_id:
-                channel_videos.append({
-                    "video_id": vid_id,
-                    "title": title,
-                    "ref_title": orig_ref or title
-                })
 
             if pub_str:
                 pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
@@ -125,41 +115,10 @@ def get_channel_status_and_24h_count(youtube):
             f"Uploads since 11:30 AM reset: {uploads_since_reset}/{MAX_DAILY_UPLOADS} "
             f"(Reserved for Match Summaries: {RESERVED_FOR_SUMMARIES})"
         )
-        return existing_titles, uploads_since_reset, channel_videos
+        return existing_titles, uploads_since_reset
     except Exception as e:
         print(f"[WARN] Failed to read channel upload history: {e}")
-        return existing_titles, 0, []
-
-
-def restore_clean_poster_for_broken_thumbs(youtube, channel_videos, history):
-    """Restores the clean original website poster for any video that got the broken text overlay"""
-    repaired_ids = history.get("clean_restored_ids", [])
-    broken_ids = [vid for vid in history.get("fixed_thumbs", []) if vid not in repaired_ids]
-    if not broken_ids:
-        return
-
-    web_urls = [u for u in reversed(history.get("uploaded_urls", [])) if "/video/" in str(u)][:25]
-    for v in channel_videos:
-        if v["video_id"] in broken_ids:
-            for page_u in web_urls:
-                details = extract_video_details_from_page(page_u)
-                if details and is_duplicate_title(details.get("title", ""), {v["ref_title"], v["title"]}):
-                    out_jpg = f"clean_restore_{v['video_id']}.jpg"
-                    res = prepare_clean_thumbnail(None, details.get("thumb_url"), out_jpg)
-                    if res and os.path.exists(out_jpg):
-                        try:
-                            youtube.thumbnails().set(
-                                videoId=v["video_id"], media_body=MediaFileUpload(out_jpg)
-                            ).execute()
-                            print(f"[RESTORE] Restored clean original poster for: {v['title'][:40]}")
-                        except Exception:
-                            pass
-                        finally:
-                            os.remove(out_jpg)
-                    break
-            repaired_ids.append(v["video_id"])
-            history["clean_restored_ids"] = repaired_ids
-            save_history(history)
+        return existing_titles, 0
 
 
 def get_or_create_playlist(youtube, playlist_title, cache):
@@ -254,7 +213,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
             youtube.thumbnails().set(
                 videoId=video_id, media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("[THUMBNAIL] Clean official 1280x720 poster applied.")
+            print("[THUMBNAIL] High-resolution 1280x720 thumbnail applied.")
         except Exception as e:
             print(f"[INFO] Thumbnail upload note: {e}")
 
@@ -262,16 +221,13 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Official News Agency Bot starting (Clean Official Poster Edition)...")
+    print("[START] Footballi Bot starting (Hybrid: 100% Free Audit + Pay-Per-Upload Premium SEO)...")
     history = load_history()
     youtube = get_authenticated_service()
 
-    existing_titles, uploads_today, channel_videos = get_channel_status_and_24h_count(youtube)
+    existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
-
-    # Automatically restore the clean poster for the video that had the broken font
-    restore_clean_poster_for_broken_thumbs(youtube, channel_videos, history)
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
@@ -314,7 +270,8 @@ def main():
         print("[IDLE] No valid videos remained after page inspection.")
         return
 
-    ai_results = ai_batch_evaluate(enriched_pool)
+    # فاز ۱: ممیزی کپی‌رایت به صورت ۱۰۰٪ رایگان با اکانت گوگل شما (هزینه صفر)
+    audit_results = ai_free_copyright_audit(enriched_pool)
 
     playlist_cache = {}
     uploaded_in_this_run = 0
@@ -328,9 +285,9 @@ def main():
             print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving last 3 slots for Match Summaries).")
             continue
 
-        ai_info = ai_results.get(idx)
-        if ai_info is not None and not ai_info.get("safe", False):
-            print(f"[AI REJECT] ({ai_info.get('reason')}): {item['title']}")
+        audit_info = audit_results.get(idx)
+        if audit_info is not None and not audit_info.get("safe", False):
+            print(f"[FREE-REJECT] ({audit_info.get('reason')}): {item['title']}")
             history["uploaded_urls"].append(item["url"])
             save_history(history)
             continue
@@ -357,18 +314,23 @@ def main():
 
         original_title = item["title"]
 
-        if ai_info:
-            seo_title = ai_info.get("seo_title") or original_title
-            seo_desc = ai_info.get("seo_description") or original_title
-            seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
-        else:
-            seo_title = original_title
-            seo_desc = (
-                f"{original_title}\n\n"
-                "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
-                "#فوتبالی #فوتبال_ایران #لیگ_برتر"
-            )
-            seo_tags = ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "ورزش"]
+        # فاز ۲: فقط اکنون که ویدیوی قطعی دانلود شد، آروان یک‌بار برای تولید سئو و تامبنیل فراخوانی می‌شود
+        print(f"[PREMIUM] Requesting Arvan SEO & Thumbnail for: {original_title[:45]}")
+        seo_data = arvan_generate_single_seo(
+            original_title,
+            video_tags=item.get("tags", ""),
+            is_short=is_short_video,
+            is_summary=is_sum
+        )
+
+        seo_title = seo_data.get("seo_title") or original_title
+        seo_desc = seo_data.get("seo_description") or (
+            f"{original_title}\n\n"
+            "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
+            "#فوتبالی #فوتبال_ایران #لیگ_برتر"
+        )
+        seo_tags = seo_data.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی"]
+        image_prompt = seo_data.get("image_prompt", "")
 
         if is_short_video:
             target_playlist = "ویدیوهای کوتاه (Shorts)"
@@ -379,11 +341,13 @@ def main():
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
 
+            # ساخت تامبنیل هوش مصنوعی از آروان (با بازگشت به پوستر تمیز سایت در صورت نیاز)
             thumb_to_use = prepare_clean_thumbnail(
                 video_file,
                 item.get("thumb_url"),
                 thumb_file,
-                duration=duration
+                duration=duration,
+                image_prompt=image_prompt
             )
 
         final_description = (
