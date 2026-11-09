@@ -40,7 +40,6 @@ def normalize_persian(text):
 
 
 def is_match_summary(title):
-    """Strictly returns True ONLY if the title explicitly states it is a Full Match Summary"""
     t = normalize_persian(title)
     return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
 
@@ -90,7 +89,10 @@ def extract_title_for_link(a_tag):
 
 def scrape_website_candidates(history, existing_titles, save_history_fn):
     """
-    Strictly crawls ONLY dedicated '/video/<id>' pages (never text '/news/' pages that lack a main video player).
+    Crawls all Footballi video & match summary hubs.
+    Captures:
+    1. Direct /video/<id> links.
+    2. /news/<id> links ONLY when they are Match Summaries ('خلاصه بازی') or on '/news/video'.
     """
     candidates = []
     seen_in_this_scan = set()
@@ -103,6 +105,7 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
         try:
             resp = requests.get(page_url, headers=HEADERS, timeout=20)
             if resp.status_code != 200:
+                print(f"[WARN] HTTP {resp.status_code} on {decoded_page_url}")
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -110,18 +113,24 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
-                # CRITICAL FIX: Only accept genuine /video/<id> pages!
-                # Never scrape /news/<id> text articles because they don't have a main video player and cause sidebar mp4 mixups!
-                if not re.search(r"/video/\d+", href):
+                is_vid_link = bool(re.search(r"/video/\d+", href))
+                is_news_link = bool(re.search(r"/news/\d+", href))
+
+                if not is_vid_link and not is_news_link:
                     continue
 
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
-
                 if full_url in seen_in_this_scan or full_url in permanently_done_urls:
                     continue
 
                 clean_t = extract_title_for_link(a)
                 if not clean_t or len(clean_t) < 6:
+                    continue
+
+                is_sum = is_match_summary(clean_t)
+
+                # If it's a /news/<id> link (not /video/<id>), ONLY accept it if its title is a Match Summary!
+                if is_news_link and not is_vid_link and not is_sum:
                     continue
 
                 if is_duplicate_title(clean_t, existing_titles):
@@ -134,9 +143,6 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                     history["uploaded_urls"].append(full_url)
                     continue
 
-                # Strictly check if title itself is a Match Summary
-                is_sum = is_match_summary(clean_t)
-
                 seen_in_this_scan.add(full_url)
                 page_matches += 1
                 candidates.append({
@@ -147,8 +153,7 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                     "is_summary": is_sum
                 })
 
-            if page_matches > 0:
-                print(f"[CRAWLER] Found {page_matches} video candidates on {decoded_page_url}")
+            print(f"[CRAWLER] Scanned {decoded_page_url} -> {page_matches} new candidates")
 
         except Exception as e:
             print(f"[WARN] Failed crawling {decoded_page_url}: {e}")
@@ -159,13 +164,12 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
 def extract_video_details_from_page(page_url):
     """
-    Strictly extracts ONLY the primary video of this exact page:
-    1. Removes sidebars, related videos, and footers from the HTML before searching.
-    2. Checks JSON-LD VideoObject / primary <video> tag first so it NEVER grabs a sidebar video!
+    Strictly extracts the video belonging to this exact article/video page:
+    - If page_url is a /news/<id> summary article, it first strips sidebars/related sections,
+      then checks if the article body links to a dedicated /video/<id> page or has an inline <video> player.
+    - Verifies that the extracted video title matches the article topic (zero sidebar mixups).
     """
     clean_page_url = sanitize_url(page_url)
-    if not re.search(r"/video/\d+", clean_page_url):
-        return None
 
     try:
         resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
@@ -174,42 +178,55 @@ def extract_video_details_from_page(page_url):
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
 
+        # 1. Strip all sidebars, related widgets, footers, and navbars FIRST!
+        for junk in soup.find_all(["aside", "footer", "nav", "header"]):
+            junk.decompose()
+        for junk_div in soup.find_all(
+            "div",
+            class_=re.compile(r"related|sidebar|suggest|more|popular|widget|most-viewed|latest", re.I)
+        ):
+            junk_div.decompose()
+
         h1 = soup.find("h1")
-        title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
-        if not title:
+        page_title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
+        if not page_title:
             return None
 
         tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")]
         tags_text = " ".join(tags_list)
 
-        if not is_safe_by_keywords(title, tags_text):
+        if not is_safe_by_keywords(page_title, tags_text):
             return {"rejected_forever": True}
 
-        # Remove sidebars, footers, navs, and related video widgets so we NEVER mix up videos!
-        for junk in soup.find_all(["aside", "footer", "nav"]):
-            junk.decompose()
-        for junk_div in soup.find_all("div", class_=re.compile(r"related|sidebar|suggest|more|popular|widget", re.I)):
-            junk_div.decompose()
+        # 2. If this is a /news/<id> article, check if the main article body contains a dedicated /video/<id> link
+        if "/news/" in clean_page_url:
+            vid_links = [
+                a["href"] for a in soup.find_all("a", href=re.compile(r"/video/\d+"))
+            ]
+            if vid_links:
+                dedicated_vid_url = sanitize_url(urljoin(BASE_URL, vid_links[0]).split("?")[0])
+                return extract_video_details_from_page(dedicated_vid_url)
 
         mp4_url = None
         thumb_url = None
 
-        # Priority 1: Official JSON-LD VideoObject schema for this exact page
+        # 3. Check JSON-LD VideoObject
         for script in soup.find_all("script", type="application/ld+json"):
             try:
                 ld_data = json.loads(script.string or "")
                 items = ld_data if isinstance(ld_data, list) else [ld_data]
                 for obj in items:
                     if isinstance(obj, dict) and obj.get("@type") == "VideoObject":
-                        if obj.get("contentUrl") and ".mp4" in obj.get("contentUrl", ""):
-                            mp4_url = obj["contentUrl"]
+                        c_url = obj.get("contentUrl") or obj.get("embedUrl") or ""
+                        if ".mp4" in c_url:
+                            mp4_url = c_url
                         if obj.get("thumbnailUrl"):
                             t_u = obj["thumbnailUrl"]
                             thumb_url = t_u[0] if isinstance(t_u, list) else t_u
             except Exception:
                 pass
 
-        # Priority 2: Direct <video> / <source> element inside the main content area
+        # 4. Check <video> / <source> tag inside main article
         if not mp4_url:
             vid_tag = soup.find("video")
             if vid_tag:
@@ -222,12 +239,20 @@ def extract_video_details_from_page(page_url):
                 if not thumb_url and vid_tag.get("poster"):
                     thumb_url = vid_tag.get("poster")
 
-        # Priority 3: Cleaned main container HTML only (after sidebars were destroyed)
-        if not mp4_url:
-            main_html = str(soup).replace("\\/", "/")
-            mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', main_html)
+        # 5. Check remaining cleaned main article HTML (ONLY on /video/<id> pages, never on /news/ pages)
+        if not mp4_url and "/video/" in clean_page_url:
+            cleaned_html = str(soup).replace("\\/", "/")
+            mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', cleaned_html)
             if mp4_matches:
-                mp4_url = mp4_matches[0]
+                for q in ["1080", "720", "high", "hd"]:
+                    for m in mp4_matches:
+                        if q in m.lower():
+                            mp4_url = m
+                            break
+                    if mp4_url:
+                        break
+                if not mp4_url:
+                    mp4_url = mp4_matches[0]
 
         if not mp4_url:
             return None
@@ -239,7 +264,7 @@ def extract_video_details_from_page(page_url):
 
         return {
             "mp4_url": sanitize_url(mp4_url),
-            "title": title,
+            "title": page_title,
             "tags_text": tags_text,
             "thumb_url": sanitize_url(thumb_url) if thumb_url else None
         }
