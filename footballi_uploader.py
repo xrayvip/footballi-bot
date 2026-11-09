@@ -15,7 +15,7 @@ from config import (
     PROTO, HISTORY_FILE, TOKEN_FILE,
     MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES, MAX_UPLOADS_PER_RUN
 )
-from ai_seo import ai_free_copyright_audit, arvan_generate_single_seo
+from ai_seo import ai_batch_evaluate
 from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
     fetch_instagram_reels, is_match_summary
@@ -213,7 +213,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
             youtube.thumbnails().set(
                 videoId=video_id, media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("[THUMBNAIL] High-resolution 1280x720 thumbnail applied.")
+            print("[THUMBNAIL] Polished 1280x720 HD poster applied.")
         except Exception as e:
             print(f"[INFO] Thumbnail upload note: {e}")
 
@@ -221,7 +221,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Hybrid: 100% Free Audit + Pay-Per-Upload Premium SEO)...")
+    print("[START] Footballi Bot starting (100% Free & Stable Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -270,8 +270,8 @@ def main():
         print("[IDLE] No valid videos remained after page inspection.")
         return
 
-    # فاز ۱: ممیزی کپی‌رایت به صورت ۱۰۰٪ رایگان با اکانت گوگل شما (هزینه صفر)
-    audit_results = ai_free_copyright_audit(enriched_pool)
+    # ممیزی کپی‌رایت و سئو به صورت ۱۰۰٪ رایگان با گوگل جمینای ($0 هزینه)
+    ai_results = ai_batch_evaluate(enriched_pool)
 
     playlist_cache = {}
     uploaded_in_this_run = 0
@@ -285,9 +285,9 @@ def main():
             print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving last 3 slots for Match Summaries).")
             continue
 
-        audit_info = audit_results.get(idx)
-        if audit_info is not None and not audit_info.get("safe", False):
-            print(f"[FREE-REJECT] ({audit_info.get('reason')}): {item['title']}")
+        ai_info = ai_results.get(idx)
+        if ai_info is not None and not ai_info.get("safe", False):
+            print(f"[AI REJECT] ({ai_info.get('reason')}): {item['title']}")
             history["uploaded_urls"].append(item["url"])
             save_history(history)
             continue
@@ -314,23 +314,18 @@ def main():
 
         original_title = item["title"]
 
-        # فاز ۲: فقط اکنون که ویدیوی قطعی دانلود شد، آروان یک‌بار برای تولید سئو و تامبنیل فراخوانی می‌شود
-        print(f"[PREMIUM] Requesting Arvan SEO & Thumbnail for: {original_title[:45]}")
-        seo_data = arvan_generate_single_seo(
-            original_title,
-            video_tags=item.get("tags", ""),
-            is_short=is_short_video,
-            is_summary=is_sum
-        )
-
-        seo_title = seo_data.get("seo_title") or original_title
-        seo_desc = seo_data.get("seo_description") or (
-            f"{original_title}\n\n"
-            "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
-            "#فوتبالی #فوتبال_ایران #لیگ_برتر"
-        )
-        seo_tags = seo_data.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی"]
-        image_prompt = seo_data.get("image_prompt", "")
+        if ai_info:
+            seo_title = ai_info.get("seo_title") or original_title
+            seo_desc = ai_info.get("seo_description") or original_title
+            seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
+        else:
+            seo_title = original_title
+            seo_desc = (
+                f"{original_title}\n\n"
+                "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
+                "#فوتبالی #فوتبال_ایران #لیگ_برتر"
+            )
+            seo_tags = ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "ورزش"]
 
         if is_short_video:
             target_playlist = "ویدیوهای کوتاه (Shorts)"
@@ -341,13 +336,12 @@ def main():
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
 
-            # ساخت تامبنیل هوش مصنوعی از آروان (با بازگشت به پوستر تمیز سایت در صورت نیاز)
+            # پولیش پوستر اورجینال به 1280x720 HD با کیفیت بالا و هزینه صفر
             thumb_to_use = prepare_clean_thumbnail(
                 video_file,
                 item.get("thumb_url"),
                 thumb_file,
-                duration=duration,
-                image_prompt=image_prompt
+                duration=duration
             )
 
         final_description = (
