@@ -2,11 +2,9 @@
 import os
 import re
 import json
-import base64
 import requests
 from config import PROTO
 
-ARVAN_GATEWAY = PROTO + "ai.najafivip" + ".ir/v1"
 GOOGLE_API_BASE = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
 
 
@@ -20,20 +18,17 @@ def sanitize_url(u):
     return s
 
 
-# =========================================================================
-# مرحله ۱: ممیزی کپی‌رایت با جمینای رایگان گوگل (هزینه صفر - هر ۱۵ دقیقه)
-# =========================================================================
-def ai_free_copyright_audit(candidates):
+def ai_batch_evaluate(candidates):
     """
-    100% FREE batch copyright audit using Google AI Studio free tier.
-    Zero consumption on Arvan Cloud wallet.
+    100% Free SEO & Copyright Evaluation Engine using Google AI Studio free tier.
+    Generates authoritative News Agency Persian Titles, Descriptions, and Tags with $0 cost.
     """
     if not candidates:
         return {}
 
     google_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not google_key:
-        print("[WARN] Google GEMINI_API_KEY is not set.")
+        print("[WARN] GEMINI_API_KEY is not set.")
         return {}
 
     items_payload = []
@@ -42,19 +37,50 @@ def ai_free_copyright_audit(candidates):
             "index": idx,
             "title": c.get("title", ""),
             "tags": c.get("tags", ""),
+            "source": c.get("source", "web"),
             "is_short": c.get("is_short", False)
         })
 
     prompt = f"""
-You are a strict Copyright Auditor for Iranian football channel 'Footballi'.
-Audit each video below:
-- "safe": true -> Iranian domestic football ONLY (Persian Gulf Pro League, Hazfi Cup, Azadegan League, Women's League, Iran National Team press conferences/interviews, domestic player/coach interviews, studio shows).
-- "safe": false -> ANY European club match footage (Champions League, Premier League, LaLiga, Serie A, Bundesliga, etc.) OR AFC Champions League / Asian Champions League match broadcasts (even if Iranian clubs are playing!).
+You are the Chief Editor and YouTube SEO Strategist for the official Iranian sports news agency 'Footballi' (رسانه رسمی فوتبالی).
 
-Return ONLY a valid JSON array:
+Analyze each candidate video below and perform TWO tasks:
+
+TASK 1 - STRICT COPYRIGHT AUDIT:
+- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League, Women's League, Iran National Team press conferences/interviews, domestic player/coach/manager interviews, refereeing analysis, studio shows, official club media).
+- REJECT ("safe": false):
+  1. ANY European football match highlights or broadcast footage (Champions League, LaLiga, Premier League, Serie A, Bundesliga, Real Madrid, Barcelona, Man City, etc.).
+  2. ANY AFC Champions League Elite / ACL Two / Asian Champions League match footage or highlights (even if Iranian teams like Esteghlal, Persepolis, Tractor, or Sepahan are playing!).
+
+TASK 2 - OFFICIAL NEWS AGENCY SEO TITLE, DESCRIPTION & TAGS (in Persian, for safe videos):
+- "seo_title": Write an authoritative, professional, journalistic, and SEO-optimized Persian title (max 85 characters).
+  * TONE: Official sports news agency (like Sky Sports or Varzesh3). No clickbait exaggeration, no messy emojis.
+  * STRUCTURE:
+    - Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس"
+    - Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
+    - News/Behind-the-scenes: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
+  * If "is_short" is true, append " #shorts" at the end of the title.
+- "seo_description": Write a clean, professional 3-paragraph journalistic Persian description:
+  * Paragraph 1: 2 formal, informative sentences summarizing the match/event with natural high-search keywords.
+  * Paragraph 2: Official channel footer: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
+  * Paragraph 3: 6 to 8 relevant official hashtags (e.g. #فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور).
+- "seo_tags": A list of 10 high-search Persian keywords specific to this video.
+- "category": Choose the exact playlist name:
+  * "خلاصه بازی‌ها" (ONLY for match highlights/summaries)
+  * "ویدیوهای کوتاه (Shorts)" (ONLY when is_short is true)
+  * "مصاحبه و حواشی فوتبال ایران" (for interviews, news, press conferences, reactions)
+
+Return ONLY a valid JSON array with this exact schema:
 [
-  {{"index": 0, "safe": true, "reason": "Domestic Iranian football"}},
-  {{"index": 1, "safe": false, "reason": "Foreign league match"}}
+  {{
+    "index": 0,
+    "safe": true,
+    "reason": "Domestic Persian Gulf Pro League content",
+    "category": "مصاحبه و حواشی فوتبال ایران",
+    "seo_title": "...",
+    "seo_description": "...",
+    "seo_tags": ["...", "..."]
+  }}
 ]
 
 Candidates:
@@ -64,7 +90,8 @@ Candidates:
     models_to_try = [
         "models/gemini-flash-lite-latest",
         "models/gemini-3.5-flash-lite",
-        "models/gemini-2.0-flash"
+        "models/gemini-2.0-flash",
+        "models/gemini-flash-latest"
     ]
 
     for model_name in models_to_try:
@@ -72,122 +99,18 @@ Candidates:
             url = f"{GOOGLE_API_BASE}/{model_name}:generateContent"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
+                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
             }
-            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=40)
+            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=45)
             if resp.status_code == 200:
                 raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
                 parsed = json.loads(raw_text)
                 result_map = {item["index"]: item for item in parsed if "index" in item}
-                print(f"[FREE-AUDIT] Checked {len(result_map)} candidates for $0 using Google {model_name}.")
+                print(f"[FREE-SEO] Model ({model_name}) evaluated and SEO-optimized {len(result_map)} videos for $0.")
                 return result_map
-        except Exception:
+        except Exception as e:
             continue
 
     return {}
-
-
-# =========================================================================
-# مرحله ۲: سئوی ژورنالیستی و پرامپت عکاسی فقط برای ویدیوی تاییدشده (آروان)
-# =========================================================================
-def arvan_generate_single_seo(video_title, video_tags="", is_short=False, is_summary=False):
-    """
-    Called ONLY when a valid Iranian video is downloaded and confirmed for upload!
-    Uses Arvan Cloud (Gemini-3.1-Flash-Lite / GPT-4o-mini) to produce elite SEO metadata.
-    """
-    arvan_key = os.environ.get("ARVAN_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
-    if not arvan_key:
-        return {}
-
-    prompt = f"""
-You are the Chief Editor and YouTube SEO Strategist for 'Footballi' (رسانه رسمی فوتبالی).
-Write professional, authoritative News Agency metadata for this single video:
-Title: {video_title}
-Tags: {video_tags}
-Is Short: {is_short}
-Is Match Summary: {is_summary}
-
-Requirements:
-1. "seo_title": Authoritative, journalistic Persian title (max 85 chars, no clickbait words, max 1 clean separator |). If short, append #shorts.
-2. "seo_description": 3 professional paragraphs: match/event summary with natural keywords, official subscribe CTA, and 6-8 hashtags.
-3. "seo_tags": Array of 10 high-search Persian keywords.
-4. "image_prompt": Detailed photorealistic English prompt for a 16:9 thumbnail (mention exact team jersey colors, floodlights, 8k sports photography, strictly NO text, NO watermarks).
-
-Return ONLY JSON:
-{{
-  "seo_title": "...",
-  "seo_description": "...",
-  "seo_tags": ["..."],
-  "image_prompt": "..."
-}}
-"""
-
-    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    chat_url = sanitize_url(f"{ARVAN_GATEWAY}/chat/completions")
-    models = ["Gemini-3.1-Flash-Lite-Preview", "GPT-4o-mini", "GLM-5.3-Flash"]
-
-    for m in models:
-        try:
-            payload = {
-                "model": m,
-                "messages": [
-                    {"role": "system", "content": "You are a JSON-only sports SEO engine."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.2
-            }
-            resp = requests.post(chat_url, headers=headers, json=payload, timeout=35)
-            if resp.status_code == 200:
-                raw_text = resp.json()["choices"][0]["message"]["content"].strip()
-                if "```" in raw_text:
-                    match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
-                    if match:
-                        raw_text = match.group(0)
-                data = json.loads(raw_text)
-                print(f"[PREMIUM-SEO] Generated SEO & thumbnail prompt using {m} on Arvan.")
-                return data
-        except Exception as e:
-            print(f"[WARN] Arvan SEO error on {m}: {e}")
-
-    return {}
-
-
-# =========================================================================
-# مرحله ۳: تولید تصویر تامبنیل ۱۶:۹ از آروان (فقط در زمان آپلود)
-# =========================================================================
-def generate_ai_thumbnail(image_prompt, output_path):
-    arvan_key = os.environ.get("ARVAN_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
-    if not arvan_key or not image_prompt:
-        return False
-
-    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    image_models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
-
-    for model_name in image_models:
-        try:
-            img_gen_url = sanitize_url(f"{ARVAN_GATEWAY}/images/generations")
-            payload = {"model": model_name, "prompt": image_prompt, "n": 1, "size": "1280x720"}
-            resp = requests.post(img_gen_url, headers=headers, json=payload, timeout=60)
-            if resp.status_code == 200:
-                data_list = resp.json().get("data", [])
-                if data_list:
-                    b64_data = data_list[0].get("b64_json")
-                    img_url = data_list[0].get("url")
-                    if b64_data:
-                        with open(output_path, "wb") as f:
-                            f.write(base64.b64decode(b64_data))
-                        print(f"[AI-IMAGE] Generated 16:9 thumbnail via {model_name}.")
-                        return True
-                    elif img_url:
-                        r_dl = requests.get(sanitize_url(img_url), timeout=30)
-                        if r_dl.status_code == 200 and len(r_dl.content) > 10_000:
-                            with open(output_path, "wb") as f:
-                                f.write(r_dl.content)
-                            print(f"[AI-IMAGE] Generated 16:9 thumbnail via {model_name}.")
-                            return True
-        except Exception:
-            pass
-
-    return False
