@@ -163,7 +163,7 @@ def generate_ai_thumbnail(image_prompt, output_path):
         return False
 
     headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    image_models = ["Gemini-3.1-Flash-Image-Preview", "Gemini-3-Pro-Image-Preview"]
+    image_models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
 
     for model_name in image_models:
         try:
