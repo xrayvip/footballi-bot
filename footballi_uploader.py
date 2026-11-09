@@ -3,6 +3,7 @@ import os
 import re
 import json
 import time
+import subprocess
 from datetime import datetime, timezone, timedelta
 
 from google.oauth2.credentials import Credentials
@@ -15,13 +16,14 @@ from config import (
     PROTO, HISTORY_FILE, TOKEN_FILE,
     MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES, MAX_UPLOADS_PER_RUN
 )
-from ai_seo import ai_batch_evaluate
+from ai_seo import ai_batch_evaluate, sanitize_url
 from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
-    fetch_instagram_reels, is_match_summary
+    fetch_instagram_reels, is_match_summary, is_duplicate_title
 )
 from media_utils import (
-    inspect_video_file, enhance_short_to_1080p, download_file, build_hd_thumbnail
+    inspect_video_file, enhance_short_to_1080p, download_file,
+    build_hd_thumbnail, render_branded_overlay
 )
 
 
@@ -31,21 +33,28 @@ def load_history():
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return {"uploaded_urls": data, "uploaded_titles": [], "last_apify_run": 0}
+                    return {
+                        "uploaded_urls": data,
+                        "uploaded_titles": [],
+                        "fixed_thumbs": [],
+                        "last_apify_run": 0
+                    }
                 if isinstance(data, dict):
                     data.setdefault("uploaded_urls", [])
                     data.setdefault("uploaded_titles", [])
+                    data.setdefault("fixed_thumbs", [])
                     data.setdefault("last_apify_run", 0)
                     return data
         except Exception as e:
             print(f"[WARN] Could not read history file: {e}")
-    return {"uploaded_urls": [], "uploaded_titles": [], "last_apify_run": 0}
+    return {"uploaded_urls": [], "uploaded_titles": [], "fixed_thumbs": [], "last_apify_run": 0}
 
 
 def save_history(history):
     try:
         history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-2000:]
         history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1500:]
+        history["fixed_thumbs"] = list(dict.fromkeys(history.get("fixed_thumbs", [])))[-1000:]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -73,6 +82,7 @@ def get_authenticated_service():
 def get_channel_status_and_24h_count(youtube):
     existing_titles = set()
     uploads_since_reset = 0
+    channel_videos = []
 
     try:
         now_utc = datetime.now(timezone.utc)
@@ -83,7 +93,7 @@ def get_channel_status_and_24h_count(youtube):
         ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
         items = ch_res.get("items", [])
         if not items:
-            return existing_titles, 0
+            return existing_titles, 0, []
 
         uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
         pl_res = youtube.playlistItems().list(
@@ -92,6 +102,7 @@ def get_channel_status_and_24h_count(youtube):
 
         for item in pl_res.get("items", []):
             snippet = item.get("snippet", {})
+            vid_id = snippet.get("resourceId", {}).get("videoId", "")
             title = snippet.get("title", "").strip()
             desc = snippet.get("description", "")
             pub_str = snippet.get("publishedAt", "")
@@ -99,11 +110,20 @@ def get_channel_status_and_24h_count(youtube):
             if title:
                 existing_titles.add(title)
 
+            orig_ref = ""
             for line in desc.splitlines():
                 if line.strip().startswith("RefTitle:"):
                     orig_ref = line.split("RefTitle:", 1)[1].strip()
                     if orig_ref:
                         existing_titles.add(orig_ref)
+
+            if vid_id:
+                channel_videos.append({
+                    "video_id": vid_id,
+                    "title": title,
+                    "ref_title": orig_ref or title,
+                    "description": desc
+                })
 
             if pub_str:
                 pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
@@ -115,10 +135,10 @@ def get_channel_status_and_24h_count(youtube):
             f"Uploads since 11:30 AM reset: {uploads_since_reset}/{MAX_DAILY_UPLOADS} "
             f"(Reserved for Match Summaries: {RESERVED_FOR_SUMMARIES})"
         )
-        return existing_titles, uploads_since_reset
+        return existing_titles, uploads_since_reset, channel_videos
     except Exception as e:
         print(f"[WARN] Failed to read channel upload history: {e}")
-        return existing_titles, 0
+        return existing_titles, 0, []
 
 
 def get_or_create_playlist(youtube, playlist_title, cache):
@@ -213,21 +233,112 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
             youtube.thumbnails().set(
                 videoId=video_id, media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("[THUMBNAIL] Crisp 1280x720 HD thumbnail applied.")
+            print("[THUMBNAIL] Branded 1280x720 HD thumbnail applied.")
         except Exception as e:
             print(f"[INFO] Thumbnail upload note: {e}")
 
     return video_id
 
 
+def fix_existing_thumbnails(youtube, channel_videos, history):
+    """
+    Backfills branded 1280x720 HD thumbnails (with Persian headline + Footballi badge)
+    for older long-form videos on the channel.
+    """
+    fixed_set = set(history.get("fixed_thumbs", []))
+    candidates_to_fix = []
+
+    for v in channel_videos:
+        vid_id = v["video_id"]
+        title = v["title"]
+        if vid_id in fixed_set:
+            continue
+        if "#shorts" in title.lower():
+            fixed_set.add(vid_id)
+            history["fixed_thumbs"].append(vid_id)
+            continue
+        candidates_to_fix.append(v)
+
+    if not candidates_to_fix:
+        return
+
+    print(f"[THUMB-REPAIR] Checking {len(candidates_to_fix)} existing long-form videos for Branded HD upgrade...")
+
+    web_urls = [
+        u for u in reversed(history.get("uploaded_urls", []))
+        if isinstance(u, str) and ("/video/" in u or "/news/video" in u)
+    ][:80]
+
+    repaired_count = 0
+    vf_scale = (
+        "scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,"
+        "crop=1280:720,"
+        "unsharp=5:5:0.7:3:3:0.0"
+    )
+
+    for v in candidates_to_fix:
+        if repaired_count >= 3:
+            break
+
+        vid_id = v["video_id"]
+        ref_t = v["ref_title"]
+        matched_mp4 = None
+
+        for page_u in web_urls:
+            details = extract_video_details_from_page(page_u)
+            if not details or not details.get("title"):
+                continue
+            if is_duplicate_title(details["title"], {ref_t, v["title"]}):
+                matched_mp4 = details.get("mp4_url")
+                break
+
+        if not matched_mp4:
+            history["fixed_thumbs"].append(vid_id)
+            save_history(history)
+            continue
+
+        out_jpg = f"repair_thumb_{vid_id}.jpg"
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-ss", "25",
+            "-i", sanitize_url(matched_mp4),
+            "-vf", f"thumbnail=25,{vf_scale}",
+            "-frames:v", "1",
+            "-q:v", "2",
+            out_jpg
+        ]
+        try:
+            subprocess.run(cmd, timeout=40)
+            if os.path.exists(out_jpg) and os.path.getsize(out_jpg) > 10_000:
+                short_headline = v["title"].split("|")[0].strip()
+                is_sum = is_match_summary(v["title"])
+                render_branded_overlay(out_jpg, short_headline, is_summary=is_sum)
+
+                youtube.thumbnails().set(
+                    videoId=vid_id, media_body=MediaFileUpload(out_jpg)
+                ).execute()
+                print(f"[THUMB-REPAIR] Upgraded Branded HD thumbnail for ({vid_id}): {short_headline[:40]}")
+                repaired_count += 1
+        except Exception as e:
+            print(f"[WARN] Could not repair thumbnail for {vid_id}: {e}")
+        finally:
+            if os.path.exists(out_jpg):
+                os.remove(out_jpg)
+            history["fixed_thumbs"].append(vid_id)
+            save_history(history)
+
+
 def main():
-    print("[START] Footballi Official News Agency Bot starting (HD Thumbnail Edition)...")
+    print("[START] Footballi Official News Agency Bot starting (Branded HD Thumbnail Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
-    existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
+    existing_titles, uploads_today, channel_videos = get_channel_status_and_24h_count(youtube)
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
+
+    # Upgrade up to 3 older long-form video thumbnails per run with branded overlays
+    fix_existing_thumbnails(youtube, channel_videos, history)
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
@@ -315,10 +426,12 @@ def main():
 
         if ai_info:
             seo_title = ai_info.get("seo_title") or original_title
+            thumb_headline = ai_info.get("thumb_text") or seo_title.split("|")[0].strip()
             seo_desc = ai_info.get("seo_description") or original_title
             seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
         else:
             seo_title = original_title
+            thumb_headline = original_title[:32]
             seo_desc = (
                 f"{original_title}\n\n"
                 "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
@@ -334,10 +447,14 @@ def main():
         else:
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
-            
-            # تولید یا استخراج هوشمند تامبنیل با کیفیت 1280x720 HD
+
             thumb_to_use = build_hd_thumbnail(
-                video_file, item.get("thumb_url"), thumb_file, duration
+                video_file,
+                item.get("thumb_url"),
+                thumb_file,
+                duration=duration,
+                headline_text=thumb_headline,
+                is_summary=is_sum
             )
 
         final_description = (
@@ -358,6 +475,7 @@ def main():
             history["uploaded_urls"].append(item["url"])
             history["uploaded_titles"].append(original_title)
             history["uploaded_titles"].append(seo_title)
+            history["fixed_thumbs"].append(vid_id)
             save_history(history)
 
             existing_titles.add(original_title)
