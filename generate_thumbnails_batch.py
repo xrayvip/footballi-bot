@@ -15,17 +15,15 @@ TOKEN_FILE = "token.json"
 
 
 def extract_video_id(input_str):
-    """Extracts YouTube 11-char Video ID from any URL format or bare ID"""
     if not input_str:
         return ""
     s = input_str.strip()
-    # Match standard youtu.be or watch?v= or embed/ or bare 11 chars
     m = re.search(r"(?:v=|\/|be\/|embed\/)([A-Za-z0-9_-]{11})", s)
     if m:
         return m.group(1)
     if len(s) == 11:
         return s
-    return s
+    return s.split("?")[0].split("&")[0]
 
 
 def get_youtube_service():
@@ -46,20 +44,15 @@ def get_youtube_service():
 
 
 def add_official_footballi_watermark(image_path):
-    """Adds official Footballi green/white broadcast watermark badge in the top-right corner"""
     try:
         img = Image.open(image_path).convert("RGBA")
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # Draw sleek emerald-dark pill badge in top-right
         x1, y1, x2, y2 = 980, 35, 1245, 95
         draw.rounded_rectangle([(x1, y1), (x2, y2)], radius=15, fill=(6, 26, 18, 235), outline=(0, 195, 110, 255), width=3)
-
-        # Draw green accent circle
         draw.ellipse([(x1 + 18, y1 + 20), (x1 + 38, y1 + 40)], fill=(0, 215, 120, 255))
 
-        # Brand Text
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 26)
         except Exception:
@@ -74,33 +67,37 @@ def add_official_footballi_watermark(image_path):
         print(f"[WARN] Watermark note: {e}")
 
 
-def generate_face_preserving_prompt(title, desc, arvan_key):
+def generate_pure_english_prompt(title, desc, arvan_key):
+    """Guarantees a clean, 100% English prompt tailored to the match or interview"""
     headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    prompt = f"""
-You are an elite YouTube Thumbnail Art Director for Iranian sports media 'Footballi'.
-Video Title: {title}
-Video Details: {desc[:350]}
+    
+    # Simple, bulletproof system prompt
+    system_instruction = "You are an AI Image Prompt Generator. Translate the football match or sports event into an ultra-realistic English prompt for an image generator. Output English text ONLY."
+    user_query = f"Create a 16:9 football YouTube thumbnail prompt for this match/video: Title='{title}'. Mention team kits accurately (Esteghlal Khuzestan vs Esteghlal: blue vs blue/white duel on grass), intense action, stadium floodlights at night, 8k sports photography, strictly no text."
 
-Write a photorealistic, viral, high-CTR YouTube thumbnail prompt tailored to this specific video:
-- If this is an interview with an Iranian coach/player (e.g. Hamid Derakhshan): Describe a realistic, mature Iranian football expert with true facial resemblance, sitting at an official press microphone, intense expressive look, studio broadcast lighting, 16:9 widescreen.
-- If it's a match: Realistic Iranian league players in true kit colors (Esteghlal blue, Persepolis red, Sepahan yellow, Tractor red).
-- Leave space in the top-right corner for branding.
-- End with: "photorealistic 8k sports photography, dramatic lighting, 16:9 widescreen, strictly NO text, NO watermarks."
+    models = ["GPT-4o-mini", "Gemini-3.1-Flash-Lite-Preview", "Claude-Sonnet-4.6"]
+    for m in models:
+        try:
+            payload = {
+                "model": m,
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_query}
+                ],
+                "temperature": 0.2
+            }
+            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=30)
+            if r.status_code == 200:
+                out = r.json()["choices"][0]["message"]["content"].strip()
+                # Ensure no Persian characters exist in the output prompt
+                if not re.search(r"[\u0600-\u06FF]", out):
+                    print(f"[AI-PROMPT] Prompt successfully translated by {m}.")
+                    return out
+        except Exception as e:
+            print(f"[INFO] Prompt model {m}: {e}")
 
-Output ONLY the prompt text in English.
-"""
-    try:
-        payload = {
-            "model": "GPT-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2
-        }
-        r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=30)
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[WARN] Prompt error: {e}")
-    return f"Photorealistic 8k sports photography of {title}, dramatic broadcast studio lighting, 16:9 widescreen, strictly no text."
+    # Solid pure English fallback if API fails
+    return "Epic soccer match collision on grass between Esteghlal players in blue kit vs opponent in white kit, ball in mid-air, intense facial expressions, packed stadium floodlights at night, dramatic cinematic sports photography, 16:9 widescreen, strictly no text."
 
 
 def create_ai_image(image_prompt, output_jpg, arvan_key):
@@ -108,12 +105,13 @@ def create_ai_image(image_prompt, output_jpg, arvan_key):
     models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
 
     for m in models:
+        # Route A: /chat/completions
         try:
-            print(f"[AI-IMAGE] Generating bespoke thumbnail with {m}...")
+            print(f"[AI-IMAGE] Requesting image via chat endpoint ({m})...")
             payload = {
                 "model": m,
                 "messages": [
-                    {"role": "user", "content": f"Create this exact YouTube thumbnail image (16:9 aspect ratio): {image_prompt}"}
+                    {"role": "user", "content": f"Create this photorealistic 16:9 image: {image_prompt}"}
                 ]
             }
             r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=85)
@@ -142,8 +140,37 @@ def create_ai_image(image_prompt, output_jpg, arvan_key):
                             f.write(dl.content)
                         add_official_footballi_watermark(output_jpg)
                         return True
+            else:
+                print(f"[DEBUG] Chat response HTTP {r.status_code}: {r.text[:140]}")
         except Exception as e:
-            print(f"[WARN] {m} error: {e}")
+            print(f"[DEBUG] Chat error: {e}")
+
+        # Route B: /images/generations
+        try:
+            print(f"[AI-IMAGE] Requesting image via images endpoint ({m})...")
+            payload = {"model": m, "prompt": image_prompt, "n": 1, "size": "1024x1024"}
+            r = requests.post(f"{GATEWAY_BASE}/images/generations", headers=headers, json=payload, timeout=60)
+            if r.status_code == 200:
+                data_list = r.json().get("data", [])
+                if data_list:
+                    b64 = data_list[0].get("b64_json")
+                    u = data_list[0].get("url")
+                    if b64:
+                        with open(output_jpg, "wb") as f:
+                            f.write(base64.b64decode(b64))
+                        add_official_footballi_watermark(output_jpg)
+                        return True
+                    elif u:
+                        dl = requests.get(u, timeout=30)
+                        if dl.status_code == 200:
+                            with open(output_jpg, "wb") as f:
+                                f.write(dl.content)
+                            add_official_footballi_watermark(output_jpg)
+                            return True
+            else:
+                print(f"[DEBUG] Images response HTTP {r.status_code}: {r.text[:140]}")
+        except Exception as e:
+            print(f"[DEBUG] Images error: {e}")
 
     return False
 
@@ -162,7 +189,6 @@ def main():
 
     youtube = get_youtube_service()
 
-    # Fetch targeted video info from YouTube
     print(f"🔍 Fetching details for Video ID: {vid_id} ...")
     resp = youtube.videos().list(part="snippet", id=vid_id).execute()
     items = resp.get("items", [])
@@ -175,12 +201,12 @@ def main():
     desc = sn.get("description", "")
     print(f"🎯 Target Title: {title}")
 
-    # 1. Generate Prompt
-    print("🧠 Crafting bespoke creative prompt...")
-    ai_prompt = generate_face_preserving_prompt(title, desc, arvan_key)
-    print(f"🎬 Directed Prompt: {ai_prompt}")
+    # 1. Pure English Prompt Translation
+    print("🧠 Crafting 100% English Photography Prompt...")
+    ai_prompt = generate_pure_english_prompt(title, desc, arvan_key)
+    print(f"🎬 Directed English Prompt:\n{ai_prompt}\n")
 
-    # 2. Generate Image & Watermark
+    # 2. Render Image & Apply Watermark
     tmp_img = f"thumb_{vid_id}.jpg"
     if create_ai_image(ai_prompt, tmp_img, arvan_key):
         try:
