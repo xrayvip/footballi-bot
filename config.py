@@ -3,22 +3,22 @@ PROTO = "https" + "://"
 BASE_URL = PROTO + "footballi" + ".net"
 
 VIDEO_LIST_URLS = [
-    BASE_URL + "/news/video",      # Main Footballi Video News Archive
+    BASE_URL + "/news/video",
     BASE_URL + "/video",
+    BASE_URL + "/video/matches",       # آرشیو اختصاصی خلاصه مسابقات
+    BASE_URL + "/competition/14",      # لیگ برتر ایران
+    BASE_URL + "/league/14/videos",     # ویدیوهای مستقیم لیگ برتر
+    BASE_URL + "/competition/1",       # جام حذفی
+    BASE_URL + "/competition/90",      # لیگ آزادگان
     BASE_URL,
-    BASE_URL + "/competition/14",  # Persian Gulf Pro League
-    BASE_URL + "/competition/1",   # Hazfi Cup
-    BASE_URL + "/competition/90",  # Azadegan League
-    BASE_URL + "/competition/91",  # Women's League
 ]
 
 HISTORY_FILE = "uploaded_matches.json"
 TOKEN_FILE = "token.json"
 
-# Quota & Limits (Resets at 11:30 AM Iran Time / 08:00 UTC)
 MAX_DAILY_UPLOADS = 30
-RESERVED_FOR_SUMMARIES = 3
-MAX_UPLOADS_PER_RUN = 4
+RESERVED_FOR_SUMMARIES = 5
+MAX_UPLOADS_PER_RUN = 6
 APIFY_COOLDOWN_HOURS = 8
 MAX_REELS_PER_RUN = 2
 
@@ -42,5 +42,5 @@ FORBIDDEN_KEYWORDS = [
 ]
 
 SUMMARY_KEYWORDS = [
-    "خلاصه بازی", "خلاصه مسابقه", "خلاصه دیدار", "گل های بازی", "گل‌های بازی"
+    "خلاصه بازی", "خلاصه مسابقه", "خلاصه دیدار", "گل های بازی", "گل‌های بازی", "هایلایت"
 ]
