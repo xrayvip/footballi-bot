@@ -2,12 +2,12 @@
 import os
 import re
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, unquote
 import requests
 from bs4 import BeautifulSoup
 
 from config import (
-    PROTO, BASE_URL, VIDEO_LIST_URLS, HEADERS,
+    PROTO, BASE_URL, VIDEO_LIST_URLS, MATCH_SUMMARIES_URL, HEADERS,
     FORBIDDEN_KEYWORDS, SUMMARY_KEYWORDS,
     APIFY_COOLDOWN_HOURS, MAX_REELS_PER_RUN
 )
@@ -40,15 +40,9 @@ def is_match_summary(title):
 
 
 def is_duplicate_title(candidate_title, existing_titles_set):
-    """
-    Precision duplicate check:
-    Never marks a new match summary as duplicate just because it shares words like 'استقلال' or 'لیگ برتر'.
-    """
     norm_cand = normalize_persian(candidate_title)
     if not norm_cand or len(norm_cand) < 6:
         return False
-
-    is_sum = is_match_summary(candidate_title)
 
     for ex in existing_titles_set:
         norm_ex = normalize_persian(ex)
@@ -56,14 +50,6 @@ def is_duplicate_title(candidate_title, existing_titles_set):
             continue
         # Exact match
         if norm_cand == norm_ex:
-            return True
-
-        if is_sum:
-            # For summaries, only duplicate if both team names match exactly
-            continue
-
-        # For non-summaries, only exact substring of significant length
-        if len(norm_cand) > 15 and (norm_cand in norm_ex or norm_ex in norm_cand):
             return True
 
     return False
@@ -84,11 +70,14 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
     for raw_page_url in VIDEO_LIST_URLS:
         page_url = sanitize_url(raw_page_url)
+        is_dedicated_summary_page = ("%D8%AE%D9%84%D8%A7%D8%B5%D9%87" in page_url or "خلاصه" in unquote(page_url))
+
         try:
             resp = requests.get(page_url, headers=HEADERS, timeout=20)
             if resp.status_code != 200:
                 continue
             soup = BeautifulSoup(resp.text, "html.parser")
+
             for a in soup.find_all("a", href=True):
                 href = a["href"]
                 if "/video/" not in href and "/news/video" not in href:
@@ -97,7 +86,9 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
                 if full_url in seen_urls:
                     continue
-                if full_url.endswith("/news/video") or full_url.endswith("/video") or full_url.endswith("/video/matches"):
+
+                # Skip direct archive pagination links
+                if any(full_url.endswith(x) for x in ["/news/video", "/video", "/video/matches", "%D9%87%D8%A7"]):
                     continue
 
                 title_attr = a.get("title") or a.get_text(" ", strip=True)
@@ -105,7 +96,6 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                 if not clean_t or len(clean_t) < 6:
                     continue
 
-                # بررسی عدم تکراری بودن بدون سوزاندن خلاصه بازی‌ها
                 if is_duplicate_title(clean_t, existing_titles):
                     continue
 
@@ -114,13 +104,16 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                     history["uploaded_urls"].append(full_url)
                     continue
 
+                # اگر در صفحه اختصاصی خلاصه بازی‌ها بود، قطعاً خلاصه بازی است
+                is_sum = True if is_dedicated_summary_page else is_match_summary(clean_t)
+
                 seen_urls.add(full_url)
                 candidates.append({
                     "url": full_url,
                     "title": clean_t,
                     "source": "web",
                     "is_short": False,
-                    "is_summary": is_match_summary(clean_t)
+                    "is_summary": is_sum
                 })
         except Exception as e:
             print(f"[WARN] Failed scraping {page_url}: {e}")
