@@ -20,7 +20,9 @@ from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
     fetch_instagram_reels, is_match_summary
 )
-from media_utils import inspect_video_file, enhance_short_to_1080p, download_file
+from media_utils import (
+    inspect_video_file, enhance_short_to_1080p, download_file, prepare_clean_thumbnail
+)
 
 
 def load_history():
@@ -211,21 +213,28 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
             youtube.thumbnails().set(
                 videoId=video_id, media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("[THUMBNAIL] Custom thumbnail applied.")
+            print("[THUMBNAIL] Polished 1280x720 HD poster applied.")
         except Exception as e:
-            print(f"[INFO] Custom thumbnail skipped: {e}")
+            print(f"[INFO] Thumbnail upload note: {e}")
 
     return video_id
 
 
 def main():
-    print("[START] Footballi Official News Agency Bot starting (Modular Edition)...")
+    print("[START] Footballi Bot starting (Site-Wide Deep Crawler Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
     existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
+
+    # One-time unblock of recent cached URLs that were never actually uploaded to the channel
+    if not history.get("unblocked_v2"):
+        history["uploaded_urls"] = []
+        history["unblocked_v2"] = True
+        save_history(history)
+        print("[CACHE-RESET] Cleared stale URL cache so all un-uploaded Match Summaries are scanned fresh.")
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
@@ -237,12 +246,14 @@ def main():
     summaries = [c for c in web_candidates if c.get("is_summary")]
     others = [c for c in web_candidates if not c.get("is_summary")]
 
+    print(f"[DISCOVERY] Found {len(summaries)} Match Summaries and {len(others)} other videos.")
+
     non_summary_cap = MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES
     if uploads_today >= non_summary_cap:
         print("[QUOTA] Reserved summary zone active! Processing Match Summaries only.")
-        pool = summaries[:10]
+        pool = summaries[:15]
     else:
-        pool = (summaries + reel_candidates + others)[:20]
+        pool = (summaries + reel_candidates + others)[:25]
 
     if not pool:
         save_history(history)
@@ -254,19 +265,25 @@ def main():
         if item["source"] == "web":
             details = extract_video_details_from_page(item["url"])
             if not details:
+                continue
+            if details.get("rejected_forever"):
                 history["uploaded_urls"].append(item["url"])
                 continue
             item["mp4_url"] = details["mp4_url"]
             item["title"] = details["title"] or item["title"]
             item["tags"] = details["tags_text"]
             item["thumb_url"] = details["thumb_url"]
-            item["is_summary"] = is_match_summary(item["title"])
+            if is_match_summary(item["title"]) or is_match_summary(item["tags"]):
+                item["is_summary"] = True
         enriched_pool.append(item)
 
     if not enriched_pool:
         save_history(history)
         print("[IDLE] No valid videos remained after page inspection.")
         return
+
+    # Sort again so confirmed summaries are strictly processed first
+    enriched_pool.sort(key=lambda x: (0 if x.get("is_summary") else 1))
 
     ai_results = ai_batch_evaluate(enriched_pool)
 
@@ -277,12 +294,13 @@ def main():
         if uploaded_in_this_run >= MAX_UPLOADS_PER_RUN or uploads_today >= MAX_DAILY_UPLOADS:
             break
 
-        is_sum = item.get("is_summary", False)
+        ai_info = ai_results.get(idx)
+        is_sum = item.get("is_summary", False) or (ai_info and ai_info.get("category") == "خلاصه بازی‌ها")
+
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
-            print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving last 3 slots for Match Summaries).")
+            print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
             continue
 
-        ai_info = ai_results.get(idx)
         if ai_info is not None and not ai_info.get("safe", False):
             print(f"[AI REJECT] ({ai_info.get('reason')}): {item['title']}")
             history["uploaded_urls"].append(item["url"])
@@ -297,10 +315,12 @@ def main():
 
         width, height, duration = inspect_video_file(video_file)
         is_vertical = height > width
-        is_short_video = is_vertical or duration <= 180
+        is_short_video = is_vertical or (not is_sum and duration <= 120)
 
-        if not is_vertical and not is_sum and duration < 180:
-            print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
+        # Match summaries are NEVER skipped regardless of duration!
+        # Only non-summary horizontal clips under 2 minutes are skipped.
+        if not is_vertical and not is_sum and duration < 120:
+            print(f"[FAST SKIP] Short non-summary horizontal clip ({int(duration)}s): {item['title']}")
             os.remove(video_file)
             history["uploaded_urls"].append(item["url"])
             save_history(history)
@@ -324,7 +344,7 @@ def main():
             )
             seo_tags = ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "ورزش"]
 
-        if is_short_video:
+        if is_short_video and not is_sum:
             target_playlist = "ویدیوهای کوتاه (Shorts)"
             if "#shorts" not in seo_title.lower():
                 seo_title = f"{seo_title[:88]} #shorts"
@@ -332,9 +352,13 @@ def main():
         else:
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
-            thumb_to_use = None
-            if item.get("thumb_url") and download_file(item["thumb_url"], thumb_file):
-                thumb_to_use = thumb_file
+
+            thumb_to_use = prepare_clean_thumbnail(
+                video_file,
+                item.get("thumb_url"),
+                thumb_file,
+                duration=duration
+            )
 
         final_description = (
             f"{seo_desc}\n\n"
@@ -343,7 +367,7 @@ def main():
         )
 
         try:
-            print(f"[UPLOAD] Publishing with Official SEO Title: {seo_title}")
+            print(f"[UPLOAD] Publishing ({'MATCH SUMMARY' if is_sum else 'VIDEO'}): {seo_title}")
             vid_id = upload_to_youtube(
                 youtube, video_file, thumb_to_use, seo_title, final_description, seo_tags
             )
