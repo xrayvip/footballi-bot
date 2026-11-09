@@ -2,12 +2,14 @@
 PROTO = "https" + "://"
 BASE_URL = PROTO + "footballi" + ".net"
 
+# لینک طلایی و اختصاصی خلاصه بازی‌ها در صدر لیست
+MATCH_SUMMARIES_URL = BASE_URL + "/news/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D9%87%D8%A7"
+
 VIDEO_LIST_URLS = [
-    BASE_URL + "/news/video",
+    MATCH_SUMMARIES_URL,               # صفحه اختصاصی و مستقیم تمام خلاصه بازی‌ها
+    BASE_URL + "/news/video",          # آرشیو ویدیوها
     BASE_URL + "/video",
-    BASE_URL + "/video/matches",       # آرشیو اختصاصی خلاصه مسابقات
     BASE_URL + "/competition/14",      # لیگ برتر ایران
-    BASE_URL + "/league/14/videos",     # ویدیوهای مستقیم لیگ برتر
     BASE_URL + "/competition/1",       # جام حذفی
     BASE_URL + "/competition/90",      # لیگ آزادگان
     BASE_URL,
@@ -42,5 +44,5 @@ FORBIDDEN_KEYWORDS = [
 ]
 
 SUMMARY_KEYWORDS = [
-    "خلاصه بازی", "خلاصه مسابقه", "خلاصه دیدار", "گل های بازی", "گل‌های بازی", "هایلایت"
+    "خلاصه بازی", "خلاصه مسابقه", "خلاصه دیدار", "گل های بازی", "گل‌های بازی"
 ]
