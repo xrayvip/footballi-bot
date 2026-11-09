@@ -233,6 +233,15 @@ def main():
     youtube = get_authenticated_service()
 
     existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
+
+    # Reset stale URL cache once (unblocked_v3) while keeping live YouTube channel titles as source of truth
+    if not history.get("unblocked_v3"):
+        history["uploaded_urls"] = []
+        history["uploaded_titles"] = list(existing_titles)
+        history["unblocked_v3"] = True
+        save_history(history)
+        print("[CACHE-RESET] Cleared stale URL cache (v3); using live YouTube channel titles for deduplication.")
+
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
 
@@ -273,7 +282,6 @@ def main():
                 continue
 
             mp4_u = details["mp4_url"]
-            # CRITICAL GUARD: Never allow the same .mp4 file to be processed twice!
             if mp4_u in seen_mp4s:
                 print(f"[DUP-MP4] Skipping duplicate video stream: {mp4_u}")
                 history["uploaded_urls"].append(item["url"])
@@ -303,7 +311,6 @@ def main():
         print("[IDLE] No valid unique videos remained after page inspection.")
         return
 
-    # Strictly sort confirmed Match Summaries first
     enriched_pool.sort(key=lambda x: (0 if x.get("is_summary") else 1))
 
     ai_results = ai_batch_evaluate(enriched_pool)
@@ -322,7 +329,6 @@ def main():
             print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
             continue
 
-        # CRITICAL: If AI failed to evaluate or rejected it, DO NOT upload blindly!
         if not ai_info or not ai_info.get("safe", False):
             reason = ai_info.get("reason", "AI audit required") if ai_info else "No AI response"
             print(f"[AI REJECT] ({reason}): {item['title']}")
@@ -341,7 +347,6 @@ def main():
         is_vertical = height > width
         is_short_video = is_vertical or (not is_sum and duration <= 120)
 
-        # Match summaries must be at least 90s; non-summary horizontal videos must be at least 180s (3 mins)
         if not is_vertical:
             if is_sum and duration < 90:
                 print(f"[FAST SKIP] Clip too short to be a full Match Summary ({int(duration)}s): {item['title']}")
