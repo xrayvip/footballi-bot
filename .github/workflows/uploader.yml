@@ -9,14 +9,13 @@ concurrency:
   group: footballi-uploader-group
   cancel-in-progress: false
 
-permissions:
-  contents: write
-
 jobs:
-  run-bot:
+  upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -24,12 +23,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install libraries and ffmpeg
+      - name: Install FFmpeg & Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests
+          pip install requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
 
-      - name: Load Google Credentials
+      - name: Restore Credentials
         env:
           CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
           YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
@@ -37,19 +36,23 @@ jobs:
           echo "$CLIENT_SECRETS" > client_secrets.json
           echo "$YOUTUBE_TOKEN" > token.json
 
-      - name: Run Footballi Uploader with AI & Instagram
+      - name: Run Uploader Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-        run: python -u footballi_uploader.py
-
-      - name: Force-sync and save updated match history
         run: |
-          cp uploaded_matches.json /tmp/uploaded_matches.json
-          git fetch origin main
-          git reset --hard origin/main
-          cp /tmp/uploaded_matches.json uploaded_matches.json
-          git config user.name "Footballi Cloud Bot"
+          python -u footballi_uploader.py
+
+      - name: Save Upload History
+        run: |
+          git config user.name "Footballi Bot"
           git config user.email "bot@footballi.net"
-          git add uploaded_matches.json
-          git diff --staged --quiet || (git commit -m "Auto-update uploaded videos list" && git push --force origin main)
+          if [ -f uploaded_matches.json ]; then
+            cp uploaded_matches.json /tmp/uploaded_matches.json.bak
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/uploaded_matches.json.bak uploaded_matches.json
+            git add uploaded_matches.json
+            git diff --staged --quiet || git commit -m "Auto-update uploaded_matches.json"
+            git push --force origin main
+          fi
