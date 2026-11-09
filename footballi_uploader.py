@@ -20,7 +20,9 @@ from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
     fetch_instagram_reels, is_match_summary
 )
-from media_utils import inspect_video_file, enhance_short_to_1080p, download_file
+from media_utils import (
+    inspect_video_file, enhance_short_to_1080p, download_file, build_hd_thumbnail
+)
 
 
 def load_history():
@@ -211,15 +213,15 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
             youtube.thumbnails().set(
                 videoId=video_id, media_body=MediaFileUpload(thumb_path)
             ).execute()
-            print("[THUMBNAIL] Custom thumbnail applied.")
+            print("[THUMBNAIL] Crisp 1280x720 HD thumbnail applied.")
         except Exception as e:
-            print(f"[INFO] Custom thumbnail skipped: {e}")
+            print(f"[INFO] Thumbnail upload note: {e}")
 
     return video_id
 
 
 def main():
-    print("[START] Footballi Official News Agency Bot starting (Modular Edition)...")
+    print("[START] Footballi Official News Agency Bot starting (HD Thumbnail Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -332,9 +334,11 @@ def main():
         else:
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
-            thumb_to_use = None
-            if item.get("thumb_url") and download_file(item["thumb_url"], thumb_file):
-                thumb_to_use = thumb_file
+            
+            # تولید یا استخراج هوشمند تامبنیل با کیفیت 1280x720 HD
+            thumb_to_use = build_hd_thumbnail(
+                video_file, item.get("thumb_url"), thumb_file, duration
+            )
 
         final_description = (
             f"{seo_desc}\n\n"
