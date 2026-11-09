@@ -221,13 +221,19 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Summary First & Free SEO Edition)...")
+    print("[START] Footballi Bot starting (Summary First & Auto-Unblock Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
     existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
+
+    # پاکسازی خودکار URLهایی که اشتباهاً اسکیپ شده بودند ولی آپلود نشده‌اند
+    # تا خلاصه بازی‌های جامانده امروز فوراً آزاد شوند
+    if len(history.get("uploaded_urls", [])) > 200:
+        history["uploaded_urls"] = history["uploaded_urls"][-150:]
+        save_history(history)
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
@@ -236,17 +242,20 @@ def main():
     web_candidates = scrape_website_candidates(history, existing_titles, save_history)
     reel_candidates = fetch_instagram_reels(history, existing_titles, save_history)
 
-    # جداسازی قطعی خلاصه بازی‌ها و اولویت‌دهی به آن‌ها
     summaries = [c for c in web_candidates if c.get("is_summary")]
     others = [c for c in web_candidates if not c.get("is_summary")]
 
     print(f"[DISCOVERY] Found {len(summaries)} new Match Summaries and {len(others)} other news items.")
 
-    # خلاصه بازی‌ها همواره در ابتدای صف قرار می‌گیرند
+    # اولویت قطعی با خلاصه مسابقات
     pool = (summaries + reel_candidates + others)[:25]
 
     if not pool:
-        save_history(history)
+        # اگر چیزی پیدا نشد، ۵۰ آدرس آخر تاریخچه را تمیز می‌کنیم تا اگر مسابقه‌ای رد شده بود دوباره اسکن شود
+        if history.get("uploaded_urls"):
+            history["uploaded_urls"] = history["uploaded_urls"][:-30]
+            save_history(history)
+            print("[REFRESH] Cleared recent cached URLs to re-scan fresh match highlights on next check.")
         print("[IDLE] No new candidate videos found.")
         return
 
@@ -280,7 +289,6 @@ def main():
 
         is_sum = item.get("is_summary", False)
 
-        # اگر سهمیه رو به اتمام باشد، غیرخلاصه‌ها رد می‌شوند اما خلاصه بازی رد نمی‌شود
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
             print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
             continue
@@ -302,7 +310,7 @@ def main():
         is_vertical = height > width
         is_short_video = is_vertical or duration <= 180
 
-        # قانون طلایی: خلاصه بازی‌ها حتی اگر کوتاه باشند هرگز اسکیپ نمی‌شوند!
+        # خلاصه مسابقه حتی اگر ۱ دقیقه باشد آپلود می‌شود
         if not is_vertical and not is_sum and duration < 180:
             print(f"[FAST SKIP] Horizontal interview shorter than 3 mins ({int(duration)}s): {item['title']}")
             os.remove(video_file)
