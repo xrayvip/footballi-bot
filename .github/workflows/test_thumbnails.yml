@@ -1,0 +1,28 @@
+name: Test AI Thumbnails for Last 3 Videos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update_thumbnails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: Run Thumbnail Generator
+        env:
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+          ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python generate_thumbnails_batch.py
