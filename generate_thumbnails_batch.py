@@ -31,7 +31,6 @@ def get_youtube_service():
 
 
 def generate_prompt_with_claude(title, desc, arvan_key):
-    """Uses Claude-Opus-4.7 to generate an artistic 8K photorealistic sports photography prompt"""
     headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
     prompt = f"""
 You are an award-winning Sports Photography Director for a major football network.
@@ -61,17 +60,18 @@ Output ONLY the prompt text, nothing else.
 
 
 def create_ai_image(image_prompt, output_jpg, arvan_key):
-    """Uses Gemini-3-Pro-Image-Preview to generate the image"""
     headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
     models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
 
     for m in models:
+        # Route 1: OpenAI Images Endpoint
         try:
-            print(f"[AI-IMAGE] Generating with {m}...")
-            payload = {"model": m, "prompt": image_prompt, "n": 1, "size": "1280x720"}
-            r = requests.post(f"{GATEWAY_BASE}/images/generations", headers=headers, json=payload, timeout=90)
+            print(f"[AI-IMAGE] Trying /images/generations with {m}...")
+            payload = {"model": m, "prompt": image_prompt, "n": 1, "size": "1024x1024"}
+            r = requests.post(f"{GATEWAY_BASE}/images/generations", headers=headers, json=payload, timeout=60)
             if r.status_code == 200:
-                data_list = r.json().get("data", [])
+                res_json = r.json()
+                data_list = res_json.get("data", [])
                 if data_list:
                     b64 = data_list[0].get("b64_json")
                     u = data_list[0].get("url")
@@ -85,8 +85,51 @@ def create_ai_image(image_prompt, output_jpg, arvan_key):
                             with open(output_jpg, "wb") as f:
                                 f.write(dl.content)
                             return True
+            else:
+                print(f"[DEBUG] /images/generations ({m}) returned {r.status_code}: {r.text[:120]}")
         except Exception as e:
-            print(f"[WARN] {m} failed: {e}")
+            print(f"[DEBUG] /images/generations error: {e}")
+
+        # Route 2: Chat Completions Endpoint (Multimodal Image Gen)
+        try:
+            print(f"[AI-IMAGE] Trying /chat/completions with {m}...")
+            payload = {
+                "model": m,
+                "messages": [
+                    {"role": "user", "content": f"Generate a photorealistic 16:9 image: {image_prompt}"}
+                ]
+            }
+            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=80)
+            if r.status_code == 200:
+                data = r.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                # Check base64
+                b64_match = re.search(r"data:image/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)", str(content))
+                if b64_match:
+                    with open(output_jpg, "wb") as f:
+                        f.write(base64.b64decode(b64_match.group(1)))
+                    return True
+
+                # Check URL
+                url_match = re.search(r"https?://[^\s\)\"'>]+\.(?:png|jpg|jpeg|webp)", str(content), re.IGNORECASE)
+                if not url_match:
+                    url_match = re.search(r"!\[.*?\]\((https?://[^\s\)]+)\)", str(content))
+                    img_u = url_match.group(1) if url_match else None
+                else:
+                    img_u = url_match.group(0)
+
+                if img_u:
+                    dl = requests.get(img_u, timeout=30)
+                    if dl.status_code == 200:
+                        with open(output_jpg, "wb") as f:
+                            f.write(dl.content)
+                        return True
+            else:
+                print(f"[DEBUG] /chat/completions ({m}) returned {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            print(f"[DEBUG] /chat/completions error: {e}")
+
     return False
 
 
@@ -98,14 +141,11 @@ def main():
 
     youtube = get_youtube_service()
 
-    # Get uploaded playlist
     ch = youtube.channels().list(part="contentDetails", mine=True).execute()
     up_pl = ch["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-    # Fetch last 10 videos
     pl_items = youtube.playlistItems().list(part="snippet", playlistId=up_pl, maxResults=10).execute()
 
-    # Filter out Shorts and pick the last 3 long-form videos
     long_videos = []
     for it in pl_items.get("items", []):
         sn = it["snippet"]
@@ -123,15 +163,12 @@ def main():
         title = v["title"]
         print(f"\n[{idx}/3] Processing: {title[:50]} (ID: {vid_id})")
 
-        # 1. Claude generates prompt
         print("🧠 Claude-Opus-4.7 is directing the photography prompt...")
         ai_prompt = generate_prompt_with_claude(title, v["desc"], arvan_key)
         print(f"🎬 Prompt: {ai_prompt[:120]}...")
 
-        # 2. Gemini-3-Pro-Image generates 8K thumbnail
         tmp_img = f"thumb_{vid_id}.jpg"
         if create_ai_image(ai_prompt, tmp_img, arvan_key):
-            # 3. Upload to YouTube
             try:
                 youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(tmp_img)).execute()
                 print(f"✅ Successfully updated thumbnail for video: https://youtu.be/{vid_id}")
@@ -141,7 +178,7 @@ def main():
                 if os.path.exists(tmp_img):
                     os.remove(tmp_img)
         else:
-            print("❌ Image generation failed.")
+            print(f"❌ Image generation failed for video {vid_id}.")
 
 
 if __name__ == "__main__":
