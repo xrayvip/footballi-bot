@@ -31,7 +31,7 @@ def inspect_video_file(filepath):
 
 
 def enhance_short_to_1080p(input_path, width, height):
-    """Upscales low-res vertical Shorts to crisp 1080x1920 Full HD"""
+    """Upscale and sharpen low-res vertical Shorts/Reels to crisp 1080x1920 Full HD"""
     if width >= 1080 or height >= 1920:
         print(f"[QUALITY] Short is already Full HD ({width}x{height}).")
         return input_path
@@ -72,7 +72,7 @@ def enhance_short_to_1080p(input_path, width, height):
     return input_path
 
 
-def download_file(url, dest_path, min_bytes=3_000):
+def download_file(url, dest_path):
     clean_u = sanitize_url(url)
     if not clean_u:
         return False
@@ -83,53 +83,7 @@ def download_file(url, dest_path, min_bytes=3_000):
                 for chunk in r.iter_content(chunk_size=1024 * 256):
                     if chunk:
                         f.write(chunk)
-        return os.path.exists(dest_path) and os.path.getsize(dest_path) > min_bytes
+        return os.path.exists(dest_path) and os.path.getsize(dest_path) > 50_000
     except Exception as e:
         print(f"[WARN] Download failed for {clean_u}: {e}")
         return False
-
-
-def prepare_clean_thumbnail(video_path, thumb_url, output_thumb_path, duration=120.0):
-    """
-    1. Downloads the official Footballi match poster.
-    2. Upscales to 1280x720 HD using Lanczos, polishes colors and sharpens edges cleanly.
-    3. ZERO artificial text, ZERO duplicate watermarks. 100% Free.
-    """
-    raw_thumb = output_thumb_path.replace(".jpg", "_raw.jpg")
-
-    vf_enhance = (
-        "scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,"
-        "crop=1280:720,"
-        "eq=contrast=1.07:saturation=1.12:brightness=0.01,"
-        "unsharp=5:5:0.85:3:3:0.0"
-    )
-
-    if thumb_url and download_file(thumb_url, raw_thumb, min_bytes=3_000):
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", raw_thumb, "-vf", vf_enhance, "-q:v", "2", output_thumb_path]
-        subprocess.run(cmd, timeout=30)
-        if os.path.exists(raw_thumb):
-            os.remove(raw_thumb)
-        if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 8_000:
-            print("[THUMBNAIL] Official Footballi poster polished to 1280x720 HD.")
-            return output_thumb_path
-
-    if os.path.exists(raw_thumb):
-        os.remove(raw_thumb)
-
-    # Fallback to clean video frame only if website had no poster at all
-    if video_path and os.path.exists(video_path):
-        seek_sec = max(5.0, min(duration * 0.25, 45.0))
-        cmd_frame = [
-            "ffmpeg", "-y", "-v", "error",
-            "-ss", str(seek_sec),
-            "-i", video_path,
-            "-vf", f"thumbnail=25,{vf_enhance}",
-            "-frames:v", "1",
-            "-q:v", "2",
-            output_thumb_path
-        ]
-        subprocess.run(cmd_frame, timeout=35)
-        if os.path.exists(output_thumb_path) and os.path.getsize(output_thumb_path) > 8_000:
-            return output_thumb_path
-
-    return None

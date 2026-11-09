@@ -5,8 +5,6 @@ import json
 import requests
 from config import PROTO
 
-GOOGLE_API_BASE = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
-
 
 def sanitize_url(u):
     if not u:
@@ -19,15 +17,11 @@ def sanitize_url(u):
 
 
 def ai_batch_evaluate(candidates):
-    """
-    100% Free SEO & Copyright Evaluation Engine using Google AI Studio free tier.
-    Zero external dependencies, zero API billing ($0 Cost).
-    """
     if not candidates:
         return {}
 
-    google_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not google_key:
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
         print("[WARN] GEMINI_API_KEY is not set.")
         return {}
 
@@ -54,14 +48,14 @@ TASK 1 - STRICT COPYRIGHT AUDIT:
 
 TASK 2 - OFFICIAL NEWS AGENCY SEO TITLE, DESCRIPTION & TAGS (in Persian, for safe videos):
 - "seo_title": Write an authoritative, professional, journalistic, and SEO-optimized Persian title (max 85 characters).
-  * TONE: Official sports news agency (like Sky Sports or Varzesh3). No clickbait exaggeration, no messy emojis.
+  * TONE: Official sports news agency (like Sky Sports or Varzesh3). Authoritative, clear, and engaging—NO yellow journalism, NO clickbait exaggeration (avoid words like طوفان, جنجال عجیب, باورنکردنی), and NO excessive emojis (use at most 1 clean separator like "|" or "-").
   * STRUCTURE:
-    - Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس"
-    - Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
-    - News/Behind-the-scenes: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
+    - For Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس" (or جام حذفی).
+    - For Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین و جذاب‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
+    - For Technical/Behind-the-scenes/News: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
   * If "is_short" is true, append " #shorts" at the end of the title.
 - "seo_description": Write a clean, professional 3-paragraph journalistic Persian description:
-  * Paragraph 1: 2 formal, informative sentences summarizing the match/event with natural high-search keywords.
+  * Paragraph 1: 2 formal, informative sentences summarizing the match, interview, or news event, naturally incorporating high-search keywords (full team names, head coaches, players, competition name).
   * Paragraph 2: Official channel footer: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
   * Paragraph 3: 6 to 8 relevant official hashtags (e.g. #فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور).
 - "seo_tags": A list of 10 high-search Persian keywords specific to this video.
@@ -87,30 +81,61 @@ Candidates:
 {json.dumps(items_payload, ensure_ascii=False)}
 """
 
+    gemini_base = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
     models_to_try = [
         "models/gemini-flash-lite-latest",
         "models/gemini-3.5-flash-lite",
-        "models/gemini-2.0-flash",
-        "models/gemini-flash-latest"
+        "models/gemini-flash-latest",
+        "models/gemini-2.0-flash"
     ]
+
+    try:
+        r_m = requests.get(
+            sanitize_url(f"{gemini_base}/models"),
+            params={"key": api_key},
+            timeout=15
+        )
+        if r_m.status_code == 200:
+            avail = [
+                m["name"] for m in r_m.json().get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+                and "gemini" in m["name"]
+                and "tts" not in m["name"]
+                and "image" not in m["name"]
+                and "vision" not in m["name"]
+            ]
+            if avail:
+                lite_first = sorted(avail, key=lambda x: (0 if "lite" in x else (1 if "flash" in x else 2)))
+                models_to_try = lite_first[:4]
+    except Exception:
+        pass
 
     for model_name in models_to_try:
         try:
-            url = f"{GOOGLE_API_BASE}/{model_name}:generateContent"
+            url = sanitize_url(f"{gemini_base}/{model_name}:generateContent")
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json"
+                }
             }
-            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=45)
+            resp = requests.post(url, params={"key": api_key}, json=payload, timeout=50)
             if resp.status_code == 200:
                 raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
                 parsed = json.loads(raw_text)
-                result_map = {item["index"]: item for item in parsed if "index" in item}
-                print(f"[FREE-SEO] Model ({model_name}) evaluated and SEO-optimized {len(result_map)} videos for $0.")
+                result_map = {}
+                for entry in parsed:
+                    idx = entry.get("index")
+                    if idx is not None:
+                        result_map[idx] = entry
+                print(f"[AI] Model ({model_name}) audited and SEO-optimized {len(result_map)} videos.")
                 return result_map
-        except Exception:
-            continue
+            else:
+                print(f"[WARN] Model {model_name} returned HTTP {resp.status_code}, trying next...")
+        except Exception as e:
+            print(f"[WARN] Error calling {model_name}: {e}")
 
     return {}

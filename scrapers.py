@@ -2,12 +2,12 @@
 import os
 import re
 import time
-from urllib.parse import urljoin, unquote
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
 from config import (
-    PROTO, BASE_URL, VIDEO_LIST_URLS, MATCH_SUMMARIES_URL, HEADERS,
+    PROTO, BASE_URL, VIDEO_LIST_URLS, HEADERS,
     FORBIDDEN_KEYWORDS, SUMMARY_KEYWORDS,
     APIFY_COOLDOWN_HOURS, MAX_REELS_PER_RUN
 )
@@ -34,21 +34,28 @@ def normalize_persian(text):
     return t
 
 
+def is_duplicate_title(candidate_title, existing_titles_set):
+    norm_cand = normalize_persian(candidate_title)
+    if not norm_cand or len(norm_cand) < 5:
+        return False
+    cand_words = [w for w in norm_cand.split() if len(w) > 2]
+    for ex in existing_titles_set:
+        norm_ex = normalize_persian(ex)
+        if not norm_ex:
+            continue
+        if norm_cand == norm_ex or norm_cand in norm_ex or norm_ex in norm_cand:
+            return True
+        if len(cand_words) >= 4:
+            ex_words = set(norm_ex.split())
+            overlap = sum(1 for w in cand_words if w in ex_words)
+            if overlap / len(cand_words) >= 0.8:
+                return True
+    return False
+
+
 def is_match_summary(title):
     t = normalize_persian(title)
     return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
-
-
-def is_duplicate_title(candidate_title, existing_titles_set):
-    norm_cand = normalize_persian(candidate_title)
-    if not norm_cand or len(norm_cand) < 6:
-        return False
-
-    for ex in existing_titles_set:
-        norm_ex = normalize_persian(ex)
-        if norm_cand == norm_ex:
-            return True
-    return False
 
 
 def is_safe_by_keywords(title, tags_text=""):
@@ -66,45 +73,27 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
     for raw_page_url in VIDEO_LIST_URLS:
         page_url = sanitize_url(raw_page_url)
-        is_dedicated_summary_page = ("%D8%AE%D9%84%D8%A7%D8%B5%D9%87" in page_url or "خلاصه" in unquote(page_url))
-
         try:
             resp = requests.get(page_url, headers=HEADERS, timeout=20)
             if resp.status_code != 200:
-                print(f"[HTTP-WARN] Page {page_url} returned status code {resp.status_code}")
                 continue
             soup = BeautifulSoup(resp.text, "html.parser")
-
-            found_on_page = 0
             for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-
-                # در صفحه خلاصه بازی‌ها، لینک‌ها ممکن است /video/ یا /news/ باشند
-                if is_dedicated_summary_page:
-                    valid_link = ("/video/" in href or "/news/" in href)
-                else:
-                    valid_link = ("/video/" in href or "/news/video" in href)
-
-                if not valid_link:
+                href = a["href"]
+                if "/video/" not in href and "/news/video" not in href:
                     continue
-
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
-                
-                # فیلتر لینک‌های دسته‌بندی و ناوبری
-                if any(full_url.endswith(x) for x in ["/news/video", "/video", "/video/matches", "%D9%87%D8%A7", "/news"]):
+                if full_url in seen_urls or full_url.endswith("/news/video") or full_url.endswith("/video"):
                     continue
 
                 title_attr = a.get("title") or a.get_text(" ", strip=True)
                 clean_t = clean_scraped_title(title_attr)
-                if not clean_t or len(clean_t) < 6:
-                    continue
-
-                found_on_page += 1
-
-                if full_url in seen_urls:
+                if not clean_t or len(clean_t) < 8:
                     continue
 
                 if is_duplicate_title(clean_t, existing_titles):
+                    seen_urls.add(full_url)
+                    history["uploaded_urls"].append(full_url)
                     continue
 
                 if not is_safe_by_keywords(clean_t):
@@ -112,47 +101,19 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                     history["uploaded_urls"].append(full_url)
                     continue
 
-                is_sum = True if is_dedicated_summary_page else is_match_summary(clean_t)
-
                 seen_urls.add(full_url)
                 candidates.append({
                     "url": full_url,
                     "title": clean_t,
                     "source": "web",
                     "is_short": False,
-                    "is_summary": is_sum
+                    "is_summary": is_match_summary(clean_t)
                 })
-
-            if is_dedicated_summary_page:
-                print(f"[PAGE-SCAN] Scanned '{unquote(page_url)}' -> Found {found_on_page} total video links on page.")
-
         except Exception as e:
             print(f"[WARN] Failed scraping {page_url}: {e}")
 
     save_history_fn(history)
     return candidates
-
-
-def extract_best_poster_url(soup, html):
-    candidates = []
-    vid_tag = soup.find("video")
-    if vid_tag and vid_tag.get("poster"):
-        candidates.append(vid_tag.get("poster"))
-
-    js_posters = re.findall(r'poster\s*[:=]\s*["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp))["\']', html, flags=re.IGNORECASE)
-    candidates.extend(js_posters)
-
-    for meta_prop in ["og:image", "twitter:image"]:
-        m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
-        if m_tag and m_tag.get("content"):
-            candidates.append(m_tag.get("content"))
-
-    for raw_img in candidates:
-        u = sanitize_url(raw_img)
-        if not u or "logo" in u.lower() or "default" in u.lower():
-            continue
-        return u
-    return None
 
 
 def extract_video_details_from_page(page_url):
@@ -191,10 +152,13 @@ def extract_video_details_from_page(page_url):
             if vid_tag and vid_tag.get("src"):
                 mp4_url = vid_tag["src"]
 
+        thumb_url = None
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            thumb_url = sanitize_url(og_img["content"])
+
         if not mp4_url:
             return None
-
-        thumb_url = extract_best_poster_url(soup, html)
 
         return {
             "mp4_url": sanitize_url(mp4_url),
