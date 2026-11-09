@@ -18,7 +18,7 @@ from config import (
 from ai_seo import ai_batch_evaluate
 from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
-    fetch_instagram_reels, is_match_summary
+    fetch_instagram_reels, is_match_summary, is_duplicate_title
 )
 from media_utils import (
     inspect_video_file, enhance_short_to_1080p, download_file, prepare_clean_thumbnail
@@ -31,20 +31,27 @@ def load_history():
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return {"uploaded_urls": data, "uploaded_titles": [], "last_apify_run": 0}
+                    return {
+                        "uploaded_urls": data,
+                        "uploaded_mp4s": [],
+                        "uploaded_titles": [],
+                        "last_apify_run": 0
+                    }
                 if isinstance(data, dict):
                     data.setdefault("uploaded_urls", [])
+                    data.setdefault("uploaded_mp4s", [])
                     data.setdefault("uploaded_titles", [])
                     data.setdefault("last_apify_run", 0)
                     return data
         except Exception as e:
             print(f"[WARN] Could not read history file: {e}")
-    return {"uploaded_urls": [], "uploaded_titles": [], "last_apify_run": 0}
+    return {"uploaded_urls": [], "uploaded_mp4s": [], "uploaded_titles": [], "last_apify_run": 0}
 
 
 def save_history(history):
     try:
         history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-2000:]
+        history["uploaded_mp4s"] = list(dict.fromkeys(history.get("uploaded_mp4s", [])))[-2000:]
         history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1500:]
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
@@ -221,7 +228,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Site-Wide Deep Crawler Edition)...")
+    print("[START] Footballi Bot starting (Strict Player Verification & Zero-Dup Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -229,12 +236,7 @@ def main():
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
 
-    # One-time unblock of recent cached URLs that were never actually uploaded to the channel
-    if not history.get("unblocked_v2"):
-        history["uploaded_urls"] = []
-        history["unblocked_v2"] = True
-        save_history(history)
-        print("[CACHE-RESET] Cleared stale URL cache so all un-uploaded Match Summaries are scanned fresh.")
+    seen_mp4s = set(history.get("uploaded_mp4s", []))
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
@@ -269,20 +271,39 @@ def main():
             if details.get("rejected_forever"):
                 history["uploaded_urls"].append(item["url"])
                 continue
-            item["mp4_url"] = details["mp4_url"]
-            item["title"] = details["title"] or item["title"]
+
+            mp4_u = details["mp4_url"]
+            # CRITICAL GUARD: Never allow the same .mp4 file to be processed twice!
+            if mp4_u in seen_mp4s:
+                print(f"[DUP-MP4] Skipping duplicate video stream: {mp4_u}")
+                history["uploaded_urls"].append(item["url"])
+                continue
+
+            real_title = details["title"] or item["title"]
+            if is_duplicate_title(real_title, existing_titles):
+                history["uploaded_urls"].append(item["url"])
+                continue
+
+            seen_mp4s.add(mp4_u)
+            item["mp4_url"] = mp4_u
+            item["title"] = real_title
             item["tags"] = details["tags_text"]
             item["thumb_url"] = details["thumb_url"]
-            if is_match_summary(item["title"]) or is_match_summary(item["tags"]):
-                item["is_summary"] = True
+            item["is_summary"] = is_match_summary(real_title)
+        else:
+            mp4_u = item.get("mp4_url", "")
+            if mp4_u in seen_mp4s:
+                continue
+            seen_mp4s.add(mp4_u)
+
         enriched_pool.append(item)
 
     if not enriched_pool:
         save_history(history)
-        print("[IDLE] No valid videos remained after page inspection.")
+        print("[IDLE] No valid unique videos remained after page inspection.")
         return
 
-    # Sort again so confirmed summaries are strictly processed first
+    # Strictly sort confirmed Match Summaries first
     enriched_pool.sort(key=lambda x: (0 if x.get("is_summary") else 1))
 
     ai_results = ai_batch_evaluate(enriched_pool)
@@ -295,16 +316,19 @@ def main():
             break
 
         ai_info = ai_results.get(idx)
-        is_sum = item.get("is_summary", False) or (ai_info and ai_info.get("category") == "خلاصه بازی‌ها")
+        is_sum = item.get("is_summary", False)
 
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
             print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
             continue
 
-        if ai_info is not None and not ai_info.get("safe", False):
-            print(f"[AI REJECT] ({ai_info.get('reason')}): {item['title']}")
-            history["uploaded_urls"].append(item["url"])
-            save_history(history)
+        # CRITICAL: If AI failed to evaluate or rejected it, DO NOT upload blindly!
+        if not ai_info or not ai_info.get("safe", False):
+            reason = ai_info.get("reason", "AI audit required") if ai_info else "No AI response"
+            print(f"[AI REJECT] ({reason}): {item['title']}")
+            if ai_info and not ai_info.get("safe", True):
+                history["uploaded_urls"].append(item["url"])
+                save_history(history)
             continue
 
         video_file = f"temp_video_{idx}.mp4"
@@ -317,32 +341,28 @@ def main():
         is_vertical = height > width
         is_short_video = is_vertical or (not is_sum and duration <= 120)
 
-        # Match summaries are NEVER skipped regardless of duration!
-        # Only non-summary horizontal clips under 2 minutes are skipped.
-        if not is_vertical and not is_sum and duration < 120:
-            print(f"[FAST SKIP] Short non-summary horizontal clip ({int(duration)}s): {item['title']}")
-            os.remove(video_file)
-            history["uploaded_urls"].append(item["url"])
-            save_history(history)
-            continue
+        # Match summaries must be at least 90s; non-summary horizontal videos must be at least 180s (3 mins)
+        if not is_vertical:
+            if is_sum and duration < 90:
+                print(f"[FAST SKIP] Clip too short to be a full Match Summary ({int(duration)}s): {item['title']}")
+                os.remove(video_file)
+                history["uploaded_urls"].append(item["url"])
+                save_history(history)
+                continue
+            if not is_sum and duration < 180:
+                print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
+                os.remove(video_file)
+                history["uploaded_urls"].append(item["url"])
+                save_history(history)
+                continue
 
         if is_vertical:
             enhance_short_to_1080p(video_file, width, height)
 
         original_title = item["title"]
-
-        if ai_info:
-            seo_title = ai_info.get("seo_title") or original_title
-            seo_desc = ai_info.get("seo_description") or original_title
-            seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
-        else:
-            seo_title = original_title
-            seo_desc = (
-                f"{original_title}\n\n"
-                "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها و ویدیوهای اختصاصی فوتبال ایران.\n"
-                "#فوتبالی #فوتبال_ایران #لیگ_برتر"
-            )
-            seo_tags = ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "ورزش"]
+        seo_title = ai_info.get("seo_title") or original_title
+        seo_desc = ai_info.get("seo_description") or original_title
+        seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
 
         if is_short_video and not is_sum:
             target_playlist = "ویدیوهای کوتاه (Shorts)"
@@ -376,6 +396,7 @@ def main():
             add_video_to_playlist(youtube, vid_id, pl_id)
 
             history["uploaded_urls"].append(item["url"])
+            history["uploaded_mp4s"].append(item["mp4_url"])
             history["uploaded_titles"].append(original_title)
             history["uploaded_titles"].append(seo_title)
             save_history(history)
