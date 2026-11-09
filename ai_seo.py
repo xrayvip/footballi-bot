@@ -5,6 +5,8 @@ import json
 import requests
 from config import PROTO
 
+GOOGLE_API_BASE = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
+
 
 def sanitize_url(u):
     if not u:
@@ -17,11 +19,15 @@ def sanitize_url(u):
 
 
 def ai_batch_evaluate(candidates):
+    """
+    100% Free SEO & Copyright Evaluation Engine using Google Gemini AI Studio.
+    Zero API cost, zero external dependencies.
+    """
     if not candidates:
         return {}
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
+    google_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not google_key:
         print("[WARN] GEMINI_API_KEY is not set.")
         return {}
 
@@ -32,7 +38,8 @@ def ai_batch_evaluate(candidates):
             "title": c.get("title", ""),
             "tags": c.get("tags", ""),
             "source": c.get("source", "web"),
-            "is_short": c.get("is_short", False)
+            "is_short": c.get("is_short", False),
+            "is_summary": c.get("is_summary", False)
         })
 
     prompt = f"""
@@ -41,26 +48,26 @@ You are the Chief Editor and YouTube SEO Strategist for the official Iranian spo
 Analyze each candidate video below and perform TWO tasks:
 
 TASK 1 - STRICT COPYRIGHT AUDIT:
-- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League, Women's League, Iran National Team press conferences/interviews, domestic player/coach/manager interviews, refereeing analysis, studio shows, official club media).
+- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League / لیگ آزادگان, Women's League, Futsal, Iran National Team press conferences/interviews, domestic player/coach/manager interviews, refereeing analysis, studio shows, official club media).
 - REJECT ("safe": false):
   1. ANY European football match highlights or broadcast footage (Champions League, LaLiga, Premier League, Serie A, Bundesliga, Real Madrid, Barcelona, Man City, etc.).
   2. ANY AFC Champions League Elite / ACL Two / Asian Champions League match footage or highlights (even if Iranian teams like Esteghlal, Persepolis, Tractor, or Sepahan are playing!).
 
 TASK 2 - OFFICIAL NEWS AGENCY SEO TITLE, DESCRIPTION & TAGS (in Persian, for safe videos):
 - "seo_title": Write an authoritative, professional, journalistic, and SEO-optimized Persian title (max 85 characters).
-  * TONE: Official sports news agency (like Sky Sports or Varzesh3). Authoritative, clear, and engaging—NO yellow journalism, NO clickbait exaggeration (avoid words like طوفان, جنجال عجیب, باورنکردنی), and NO excessive emojis (use at most 1 clean separator like "|" or "-").
+  * TONE: Official sports news agency (like Sky Sports or Varzesh3). No yellow clickbait, no messy emojis.
   * STRUCTURE:
-    - For Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس" (or جام حذفی).
-    - For Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین و جذاب‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
-    - For Technical/Behind-the-scenes/News: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
+    - Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | لیگ برتر ایران" (or جام حذفی / لیگ آزادگان).
+    - Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
+    - News/Behind-the-scenes: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
   * If "is_short" is true, append " #shorts" at the end of the title.
 - "seo_description": Write a clean, professional 3-paragraph journalistic Persian description:
-  * Paragraph 1: 2 formal, informative sentences summarizing the match, interview, or news event, naturally incorporating high-search keywords (full team names, head coaches, players, competition name).
+  * Paragraph 1: 2 formal, informative sentences summarizing the match/event with natural high-search keywords.
   * Paragraph 2: Official channel footer: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
   * Paragraph 3: 6 to 8 relevant official hashtags (e.g. #فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور).
 - "seo_tags": A list of 10 high-search Persian keywords specific to this video.
 - "category": Choose the exact playlist name:
-  * "خلاصه بازی‌ها" (ONLY for match highlights/summaries)
+  * "خلاصه بازی‌ها" (ONLY for match highlights/summaries/goals)
   * "ویدیوهای کوتاه (Shorts)" (ONLY when is_short is true)
   * "مصاحبه و حواشی فوتبال ایران" (for interviews, news, press conferences, reactions)
 
@@ -69,8 +76,8 @@ Return ONLY a valid JSON array with this exact schema:
   {{
     "index": 0,
     "safe": true,
-    "reason": "Domestic Persian Gulf Pro League content",
-    "category": "مصاحبه و حواشی فوتبال ایران",
+    "reason": "Domestic Iranian football content",
+    "category": "خلاصه بازی‌ها",
     "seo_title": "...",
     "seo_description": "...",
     "seo_tags": ["...", "..."]
@@ -81,18 +88,17 @@ Candidates:
 {json.dumps(items_payload, ensure_ascii=False)}
 """
 
-    gemini_base = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
     models_to_try = [
         "models/gemini-flash-lite-latest",
         "models/gemini-3.5-flash-lite",
-        "models/gemini-flash-latest",
-        "models/gemini-2.0-flash"
+        "models/gemini-2.0-flash",
+        "models/gemini-flash-latest"
     ]
 
     try:
         r_m = requests.get(
-            sanitize_url(f"{gemini_base}/models"),
-            params={"key": api_key},
+            f"{GOOGLE_API_BASE}/models",
+            params={"key": google_key},
             timeout=15
         )
         if r_m.status_code == 200:
@@ -112,30 +118,21 @@ Candidates:
 
     for model_name in models_to_try:
         try:
-            url = sanitize_url(f"{gemini_base}/{model_name}:generateContent")
+            url = f"{GOOGLE_API_BASE}/{model_name}:generateContent"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.2,
-                    "responseMimeType": "application/json"
-                }
+                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
             }
-            resp = requests.post(url, params={"key": api_key}, json=payload, timeout=50)
+            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=50)
             if resp.status_code == 200:
                 raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
                 parsed = json.loads(raw_text)
-                result_map = {}
-                for entry in parsed:
-                    idx = entry.get("index")
-                    if idx is not None:
-                        result_map[idx] = entry
-                print(f"[AI] Model ({model_name}) audited and SEO-optimized {len(result_map)} videos.")
+                result_map = {item["index"]: item for item in parsed if "index" in item}
+                print(f"[FREE-SEO] Model ({model_name}) evaluated and SEO-optimized {len(result_map)} videos for $0.")
                 return result_map
-            else:
-                print(f"[WARN] Model {model_name} returned HTTP {resp.status_code}, trying next...")
         except Exception as e:
-            print(f"[WARN] Error calling {model_name}: {e}")
+            print(f"[WARN] Model {model_name} note: {e}")
 
     return {}
