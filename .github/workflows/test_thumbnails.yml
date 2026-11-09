@@ -1,10 +1,15 @@
-name: Test AI Thumbnails for Last 3 Videos
+name: Test Single AI Thumbnail
 
 on:
   workflow_dispatch:
+    inputs:
+      video_url_or_id:
+        description: 'لینک ویدیو یا شناسه یوتیوب (Video URL or ID)'
+        required: true
+        default: 'https://youtu.be/--vp7qA9TVw'
 
 jobs:
-  update_thumbnails:
+  update_thumbnail:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -17,12 +22,13 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install requests google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          pip install requests google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
 
-      - name: Run Thumbnail Generator
+      - name: Run Single Thumbnail Generator
         env:
           YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
           ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TARGET_VIDEO: ${{ inputs.video_url_or_id }}
         run: |
           python generate_thumbnails_batch.py
