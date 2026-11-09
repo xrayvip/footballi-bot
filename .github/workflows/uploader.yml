@@ -42,11 +42,13 @@ jobs:
           echo "$CLIENT_SECRETS" > client_secrets.json
           echo "$YOUTUBE_TOKEN" > token.json
 
-      - name: Run Footballi Uploader with AI & Instagram
+            - name: Run Uploader Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-        run: python -u footballi_uploader.py
+        run: |
+          python -u footballi_uploader.py
 
       - name: Force-sync and save updated match history
         run: |
