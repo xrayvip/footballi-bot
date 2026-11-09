@@ -221,7 +221,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (100% Free & Stable Edition)...")
+    print("[START] Footballi Bot starting (Summary First & Free SEO Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -236,15 +236,14 @@ def main():
     web_candidates = scrape_website_candidates(history, existing_titles, save_history)
     reel_candidates = fetch_instagram_reels(history, existing_titles, save_history)
 
+    # جداسازی قطعی خلاصه بازی‌ها و اولویت‌دهی به آن‌ها
     summaries = [c for c in web_candidates if c.get("is_summary")]
     others = [c for c in web_candidates if not c.get("is_summary")]
 
-    non_summary_cap = MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES
-    if uploads_today >= non_summary_cap:
-        print("[QUOTA] Reserved summary zone active! Processing Match Summaries only.")
-        pool = summaries[:10]
-    else:
-        pool = (summaries + reel_candidates + others)[:20]
+    print(f"[DISCOVERY] Found {len(summaries)} new Match Summaries and {len(others)} other news items.")
+
+    # خلاصه بازی‌ها همواره در ابتدای صف قرار می‌گیرند
+    pool = (summaries + reel_candidates + others)[:25]
 
     if not pool:
         save_history(history)
@@ -270,7 +269,6 @@ def main():
         print("[IDLE] No valid videos remained after page inspection.")
         return
 
-    # ممیزی کپی‌رایت و سئو به صورت ۱۰۰٪ رایگان با گوگل جمینای ($0 هزینه)
     ai_results = ai_batch_evaluate(enriched_pool)
 
     playlist_cache = {}
@@ -281,8 +279,10 @@ def main():
             break
 
         is_sum = item.get("is_summary", False)
+
+        # اگر سهمیه رو به اتمام باشد، غیرخلاصه‌ها رد می‌شوند اما خلاصه بازی رد نمی‌شود
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
-            print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving last 3 slots for Match Summaries).")
+            print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
             continue
 
         ai_info = ai_results.get(idx)
@@ -302,8 +302,9 @@ def main():
         is_vertical = height > width
         is_short_video = is_vertical or duration <= 180
 
+        # قانون طلایی: خلاصه بازی‌ها حتی اگر کوتاه باشند هرگز اسکیپ نمی‌شوند!
         if not is_vertical and not is_sum and duration < 180:
-            print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
+            print(f"[FAST SKIP] Horizontal interview shorter than 3 mins ({int(duration)}s): {item['title']}")
             os.remove(video_file)
             history["uploaded_urls"].append(item["url"])
             save_history(history)
@@ -336,7 +337,6 @@ def main():
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
 
-            # پولیش پوستر اورجینال به 1280x720 HD با کیفیت بالا و هزینه صفر
             thumb_to_use = prepare_clean_thumbnail(
                 video_file,
                 item.get("thumb_url"),
@@ -351,7 +351,7 @@ def main():
         )
 
         try:
-            print(f"[UPLOAD] Publishing with Official SEO Title: {seo_title}")
+            print(f"[UPLOAD] Publishing ({'MATCH SUMMARY' if is_sum else 'NEWS'}): {seo_title}")
             vid_id = upload_to_youtube(
                 youtube, video_file, thumb_to_use, seo_title, final_description, seo_tags
             )
