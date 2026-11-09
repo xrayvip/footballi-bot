@@ -1,13 +1,13 @@
 # generate_thumbnails_batch.py
-# 100% Free - AI Super-Resolution & Clean Poster Enhancement
+# 100% Free - Clean Poster Enhancement via Pillow (No ffmpeg required)
 import os
 import re
-import subprocess
 import requests
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from PIL import Image, ImageEnhance, ImageFilter
 
 TOKEN_FILE = "token.json"
 
@@ -72,26 +72,30 @@ def find_original_footballi_poster(title):
     return None
 
 
-def ai_upscale_and_enhance(raw_path, output_path):
+def polish_and_enhance_poster(raw_path, output_path):
     """
-    Upscales the original Footballi poster to crisp 1280x720 HD using Lanczos interpolation,
-    smart sharpening (unsharp mask), and vibrant sports color grading with ZERO watermark overlay.
+    Upscales the original Footballi poster to crisp 1280x720 HD using Pillow:
+    - High-quality Lanczos resampling
+    - Contrast and color saturation boost for sports vibrancy
+    - Sharpness enhancement for clear text/edges
     """
-    vf_filters = (
-        "scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,"
-        "crop=1280:720,"
-        "eq=contrast=1.07:saturation=1.12:brightness=0.01,"
-        "unsharp=5:5:0.85:3:3:0.0"
-    )
-    cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-i", raw_path,
-        "-vf", vf_filters,
-        "-q:v", "2",
-        output_path
-    ]
-    res = subprocess.run(cmd, timeout=30)
-    return res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 10_000
+    try:
+        with Image.open(raw_path) as img:
+            img = img.convert("RGB")
+            # 1. Resize to exact YouTube 1280x720 HD
+            img = img.resize((1280, 720), Image.Resampling.LANCZOS)
+            
+            # 2. Boost color vibrancy & contrast slightly for YouTube feed
+            img = ImageEnhance.Color(img).enhance(1.12)
+            img = ImageEnhance.Contrast(img).enhance(1.08)
+            img = ImageEnhance.Sharpness(img).enhance(1.3)
+            
+            # 3. Save as optimized high-quality JPEG
+            img.save(output_path, "JPEG", quality=95)
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 10_000
+    except Exception as e:
+        print(f"[WARN] Pillow enhancement error: {e}")
+        return False
 
 
 def main():
@@ -129,11 +133,11 @@ def main():
             with open(raw_img, "wb") as f:
                 f.write(r_img.content)
 
-            # 2. AI Upscaling & Enhancement
-            print("✨ Running AI Super-Resolution & Color Grade (1280x720 HD)...")
-            if ai_upscale_and_enhance(raw_img, final_img):
+            # 2. Polish to 1280x720 HD
+            print("✨ Running Color Grade & Sharpness Polish (1280x720 HD)...")
+            if polish_and_enhance_poster(raw_img, final_img):
                 success = True
-                print("🌟 Poster successfully upscaled and polished to crisp 1280x720 HD.")
+                print("🌟 Poster successfully polished to crisp 1280x720 HD.")
 
     if not success:
         print("⚠️ Could not prepare enhanced poster.")
@@ -141,7 +145,7 @@ def main():
 
     try:
         youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(final_img)).execute()
-        print(f"🎉 Successfully updated enhanced official HD thumbnail for: https://youtu.be/{vid_id}")
+        print(f"🎉 Successfully updated official HD thumbnail for: https://youtu.be/{vid_id}")
     except Exception as e:
         print(f"❌ YouTube API error: {e}")
     finally:
