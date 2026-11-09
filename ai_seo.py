@@ -98,7 +98,7 @@ Candidates:
 
     # اولویت با قوی‌ترین مدل‌های پرچم‌دار لیست شما
     text_models = [
-        "Claude-Opus-4.7",
+        "Claude-Sonnet-4.6",
         "Claude-Opus-4.6",
         "Claude-Sonnet-4.6",
         "Gemini-3.1-Pro-Preview"
