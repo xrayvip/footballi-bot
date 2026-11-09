@@ -8,7 +8,6 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from bs4 import BeautifulSoup
 
 GATEWAY_BASE = "https://ai.najafivip.ir/v1"
 TOKEN_FILE = "token.json"
@@ -32,29 +31,26 @@ def get_youtube_service():
 
 
 def find_original_footballi_poster(ref_title):
-    """Searches footballi.net to find the original web poster as a visual reference"""
+    """Finds original media poster from footballi.net using lightweight regex (no external library)"""
     try:
-        search_url = f"https://footballi.net/news/video"
+        search_url = "https://footballi.net/news/video"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"}
-        r = requests.get(search_url, headers=headers, timeout=15)
+        r = requests.get(search_url, headers=headers, timeout=12)
         if r.status_code == 200:
-            soup = BeautifulSoup(r.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                if "/video/" in a["href"]:
-                    t = a.get("title") or a.get_text(" ", strip=True)
-                    if any(w in t for w in ref_title.split()[:3] if len(w) > 2):
-                        full_page = f"https://footballi.net{a['href']}" if a["href"].startswith("/") else a["href"]
-                        rp = requests.get(full_page, headers=headers, timeout=15)
-                        if rp.status_code == 200:
-                            sp = BeautifulSoup(rp.text, "html.parser")
-                            og = sp.find("meta", property="og:image") or sp.find("meta", attrs={"name": "twitter:image"})
-                            if og and og.get("content"):
-                                return og["content"]
-                            vid = sp.find("video")
-                            if vid and vid.get("poster"):
-                                return vid["poster"]
-    except Exception as e:
-        print(f"[INFO] Reference poster search: {e}")
+            html = r.text
+            links = re.findall(r'href=["\'](/video/[^"\']+)["\']', html)
+            for l in links[:15]:
+                full_page = f"https://footballi.net{l}"
+                rp = requests.get(full_page, headers=headers, timeout=10)
+                if rp.status_code == 200:
+                    page_html = rp.text
+                    posters = re.findall(r'<meta[^>]+(?:og:image|twitter:image)[^>]+content=["\']([^"\']+)["\']', page_html)
+                    if not posters:
+                        posters = re.findall(r'poster=["\']([^"\']+)["\']', page_html)
+                    if posters:
+                        return posters[0]
+    except Exception:
+        pass
     return None
 
 
@@ -90,7 +86,7 @@ Output ONLY the final image generation prompt in English.
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.4
             }
-            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=40)
+            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=35)
             if r.status_code == 200:
                 out = r.json()["choices"][0]["message"]["content"].strip()
                 print(f"[AI-DIRECTOR] Prompt crafted by {m} at near-zero cost.")
