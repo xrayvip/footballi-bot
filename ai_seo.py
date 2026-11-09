@@ -46,18 +46,17 @@ TASK 1 - STRICT COPYRIGHT AUDIT:
   1. ANY European football match highlights or broadcast footage (Champions League, LaLiga, Premier League, Serie A, Bundesliga, Real Madrid, Barcelona, Man City, etc.).
   2. ANY AFC Champions League Elite / ACL Two / Asian Champions League match footage or highlights (even if Iranian teams like Esteghlal, Persepolis, Tractor, or Sepahan are playing!).
 
-TASK 2 - OFFICIAL NEWS AGENCY SEO TITLE, DESCRIPTION & TAGS (in Persian, for safe videos):
+TASK 2 - OFFICIAL NEWS AGENCY SEO & THUMBNAIL HEADLINE (in Persian, for safe videos):
 - "seo_title": Write an authoritative, professional, journalistic, and SEO-optimized Persian title (max 85 characters).
-  * TONE: Official sports news agency (like Sky Sports or Varzesh3). Authoritative, clear, and engaging—NO yellow journalism, NO clickbait exaggeration (avoid words like طوفان, جنجال عجیب, باورنکردنی), and NO excessive emojis (use at most 1 clean separator like "|" or "-").
+  * TONE: Official sports news agency (like Sky Sports or Varzesh3).
   * STRUCTURE:
-    - For Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس" (or جام حذفی).
-    - For Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین و جذاب‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
-    - For Technical/Behind-the-scenes/News: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
+    - For Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | هفته [X] لیگ برتر خلیج فارس"
+    - For Interviews/News: "[نام شخص یا تیم]: [مهم‌ترین و جذاب‌ترین جمله خبری به صورت رسمی] | [نام رقابت]"
   * If "is_short" is true, append " #shorts" at the end of the title.
-- "seo_description": Write a clean, professional 3-paragraph journalistic Persian description:
-  * Paragraph 1: 2 formal, informative sentences summarizing the match, interview, or news event, naturally incorporating high-search keywords (full team names, head coaches, players, competition name).
-  * Paragraph 2: Official channel footer: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
-  * Paragraph 3: 6 to 8 relevant official hashtags (e.g. #فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور).
+- "thumb_text": Write a VERY SHORT, punchy, high-impact Persian headline (strictly 3 to 6 words, max 32 characters) to be printed in large bold typography on the video Thumbnail image!
+  * Examples for Match Summary: "سپاهان ۲ - ۰ ملوان" or "توقف استقلال در اهواز!"
+  * Examples for Interview/News: "واکنش تند کارترون به داوری" or "پشت صحنه اختصاصی سپاهان"
+- "seo_description": Write a clean, professional 3-paragraph journalistic Persian description with keywords, official subscribe CTA, and 6-8 hashtags.
 - "seo_tags": A list of 10 high-search Persian keywords specific to this video.
 - "category": Choose the exact playlist name:
   * "خلاصه بازی‌ها" (ONLY for match highlights/summaries)
@@ -72,6 +71,7 @@ Return ONLY a valid JSON array with this exact schema:
     "reason": "Domestic Persian Gulf Pro League content",
     "category": "مصاحبه و حواشی فوتبال ایران",
     "seo_title": "...",
+    "thumb_text": "...",
     "seo_description": "...",
     "seo_tags": ["...", "..."]
   }}
