@@ -8,6 +8,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from bs4 import BeautifulSoup
 
 GATEWAY_BASE = "https://ai.najafivip.ir/v1"
 TOKEN_FILE = "token.json"
@@ -30,33 +31,74 @@ def get_youtube_service():
     return build("youtube", "v3", credentials=creds)
 
 
-def generate_prompt_with_claude(title, desc, arvan_key):
-    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    prompt = f"""
-You are an award-winning Sports Photography Director for a major football network.
-Video Title: {title}
-Video Description: {desc[:300]}
-
-Write a photorealistic, ultra-detailed English prompt for an AI image generator to create a stunning 16:9 widescreen YouTube thumbnail:
-- Accurately mention team jersey colors (e.g. Esteghlal = royal blue kit, Persepolis = crimson red kit, Sepahan = golden yellow, Tractor = red).
-- Dramatic stadium lighting at night, volumetric floodlights, flying grass particles, dynamic angle.
-- For interviews/press: dramatic coach/player portrait at modern press mic with blurred stadium background.
-- ALWAYS END WITH: "photorealistic 8k sports photography, dramatic cinematic lighting, 16:9 widescreen aspect ratio, strictly NO text, NO letters, NO watermarks, NO badges."
-
-Output ONLY the prompt text, nothing else.
-"""
+def find_original_footballi_poster(ref_title):
+    """Searches footballi.net to find the original web poster as a visual reference"""
     try:
-        payload = {
-            "model": "Claude-Opus-4.7",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3
-        }
-        r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=50)
+        search_url = f"https://footballi.net/news/video"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"}
+        r = requests.get(search_url, headers=headers, timeout=15)
         if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
+            soup = BeautifulSoup(r.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                if "/video/" in a["href"]:
+                    t = a.get("title") or a.get_text(" ", strip=True)
+                    if any(w in t for w in ref_title.split()[:3] if len(w) > 2):
+                        full_page = f"https://footballi.net{a['href']}" if a["href"].startswith("/") else a["href"]
+                        rp = requests.get(full_page, headers=headers, timeout=15)
+                        if rp.status_code == 200:
+                            sp = BeautifulSoup(rp.text, "html.parser")
+                            og = sp.find("meta", property="og:image") or sp.find("meta", attrs={"name": "twitter:image"})
+                            if og and og.get("content"):
+                                return og["content"]
+                            vid = sp.find("video")
+                            if vid and vid.get("poster"):
+                                return vid["poster"]
     except Exception as e:
-        print(f"[WARN] Claude prompt failed: {e}")
-    return f"Epic dramatic football match scene on pitch, bright stadium floodlights at night, photorealistic 8k sports photography, 16:9 widescreen, no text, no watermarks."
+        print(f"[INFO] Reference poster search: {e}")
+    return None
+
+
+def generate_smart_prompt_budget(title, desc, ref_poster_url, arvan_key):
+    """
+    Uses the ultra-cheap, high-IQ GPT-4o-mini / Gemini-3.1-Flash-Lite (Cost: $0.0001)
+    to craft an unrestricted, highly clickable, viral YouTube Thumbnail prompt.
+    """
+    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
+    models = ["GPT-4o-mini", "Gemini-3.1-Flash-Lite-Preview", "GLM-5.3-Flash"]
+
+    prompt = f"""
+You are a World-Class YouTube Thumbnail Designer for Iran's top sports media 'Footballi'.
+Video Title: {title}
+Video Details: {desc[:350]}
+Original Media Poster Reference URL: {ref_poster_url or "None"}
+
+YOUR GOAL: Design a modern, viral, high-CTR YouTube thumbnail prompt tailored EXACTLY to this specific video.
+DO NOT use repetitive formulas (like generic stadium duels or cartoonish characters).
+Make it feel like a real Iranian sports broadcast cover:
+1. If it's a match: Feature real players from both teams, true kits, intense facial expressions, scoreboard graphics or match tension.
+2. If it's an interview or press conference: Realistic studio/press room setting with real microphone, dramatic facial expression of the speaker, engaging news headline text.
+3. Typography & Branding: Include bold, eye-catching text overlay in Persian or English relevant to the topic (e.g. key quote, score, or breaking news badge), and subtle official 'FOOTBALLI' logo watermark in the corner.
+4. Style: Ultra-realistic 4K broadcast journalism, sharp focus, natural human anatomy, dynamic depth of field, 16:9 widescreen format.
+
+Output ONLY the final image generation prompt in English.
+"""
+
+    for m in models:
+        try:
+            payload = {
+                "model": m,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.4
+            }
+            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=40)
+            if r.status_code == 200:
+                out = r.json()["choices"][0]["message"]["content"].strip()
+                print(f"[AI-DIRECTOR] Prompt crafted by {m} at near-zero cost.")
+                return out
+        except Exception as e:
+            print(f"[WARN] Prompt model {m} failed: {e}")
+
+    return f"A modern high-CTR YouTube thumbnail for Iranian football media 'Footballi': {title}, photorealistic 4K broadcast style, dramatic lighting, official sports graphic, 16:9 aspect ratio."
 
 
 def create_ai_image(image_prompt, output_jpg, arvan_key):
@@ -64,54 +106,25 @@ def create_ai_image(image_prompt, output_jpg, arvan_key):
     models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
 
     for m in models:
-        # Route 1: OpenAI Images Endpoint
         try:
-            print(f"[AI-IMAGE] Trying /images/generations with {m}...")
-            payload = {"model": m, "prompt": image_prompt, "n": 1, "size": "1024x1024"}
-            r = requests.post(f"{GATEWAY_BASE}/images/generations", headers=headers, json=payload, timeout=60)
-            if r.status_code == 200:
-                res_json = r.json()
-                data_list = res_json.get("data", [])
-                if data_list:
-                    b64 = data_list[0].get("b64_json")
-                    u = data_list[0].get("url")
-                    if b64:
-                        with open(output_jpg, "wb") as f:
-                            f.write(base64.b64decode(b64))
-                        return True
-                    elif u:
-                        dl = requests.get(u, timeout=30)
-                        if dl.status_code == 200:
-                            with open(output_jpg, "wb") as f:
-                                f.write(dl.content)
-                            return True
-            else:
-                print(f"[DEBUG] /images/generations ({m}) returned {r.status_code}: {r.text[:120]}")
-        except Exception as e:
-            print(f"[DEBUG] /images/generations error: {e}")
-
-        # Route 2: Chat Completions Endpoint (Multimodal Image Gen)
-        try:
-            print(f"[AI-IMAGE] Trying /chat/completions with {m}...")
+            print(f"[AI-IMAGE] Generating bespoke thumbnail with {m}...")
             payload = {
                 "model": m,
                 "messages": [
-                    {"role": "user", "content": f"Generate a photorealistic 16:9 image: {image_prompt}"}
+                    {"role": "user", "content": f"Create this exact YouTube thumbnail image (16:9 aspect ratio): {image_prompt}"}
                 ]
             }
-            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=80)
+            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=85)
             if r.status_code == 200:
                 data = r.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                # Check base64
                 b64_match = re.search(r"data:image/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)", str(content))
                 if b64_match:
                     with open(output_jpg, "wb") as f:
                         f.write(base64.b64decode(b64_match.group(1)))
                     return True
 
-                # Check URL
                 url_match = re.search(r"https?://[^\s\)\"'>]+\.(?:png|jpg|jpeg|webp)", str(content), re.IGNORECASE)
                 if not url_match:
                     url_match = re.search(r"!\[.*?\]\((https?://[^\s\)]+)\)", str(content))
@@ -121,14 +134,14 @@ def create_ai_image(image_prompt, output_jpg, arvan_key):
 
                 if img_u:
                     dl = requests.get(img_u, timeout=30)
-                    if dl.status_code == 200:
+                    if dl.status_code == 200 and len(dl.content) > 10_000:
                         with open(output_jpg, "wb") as f:
                             f.write(dl.content)
                         return True
             else:
-                print(f"[DEBUG] /chat/completions ({m}) returned {r.status_code}: {r.text[:120]}")
+                print(f"[DEBUG] {m} returned {r.status_code}: {r.text[:120]}")
         except Exception as e:
-            print(f"[DEBUG] /chat/completions error: {e}")
+            print(f"[WARN] {m} error: {e}")
 
     return False
 
@@ -156,29 +169,35 @@ def main():
         if len(long_videos) >= 3:
             break
 
-    print(f"🎯 Found {len(long_videos)} recent long-form videos to upgrade.")
+    print(f"🎯 Upgrading last {len(long_videos)} long-form videos with Smart Creative Engine...")
 
     for idx, v in enumerate(long_videos, 1):
         vid_id = v["id"]
         title = v["title"]
         print(f"\n[{idx}/3] Processing: {title[:50]} (ID: {vid_id})")
 
-        print("🧠 Claude-Opus-4.7 is directing the photography prompt...")
-        ai_prompt = generate_prompt_with_claude(title, v["desc"], arvan_key)
-        print(f"🎬 Prompt: {ai_prompt[:120]}...")
+        # 1. Search original web poster as inspiration reference
+        ref_poster = find_original_footballi_poster(title)
+        if ref_poster:
+            print(f"🖼️ Found original Footballi media reference: {ref_poster[:65]}...")
 
+        # 2. Budget AI Director (GPT-4o-mini / Gemini-Flash-Lite) crafts creative prompt
+        ai_prompt = generate_smart_prompt_budget(title, v["desc"], ref_poster, arvan_key)
+        print(f"🎬 Creative Prompt: {ai_prompt[:130]}...")
+
+        # 3. Gemini-3-Pro-Image renders unrestricted thumbnail
         tmp_img = f"thumb_{vid_id}.jpg"
         if create_ai_image(ai_prompt, tmp_img, arvan_key):
             try:
                 youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(tmp_img)).execute()
-                print(f"✅ Successfully updated thumbnail for video: https://youtu.be/{vid_id}")
+                print(f"✅ Successfully updated thumbnail: https://youtu.be/{vid_id}")
             except Exception as e:
                 print(f"❌ YouTube API error: {e}")
             finally:
                 if os.path.exists(tmp_img):
                     os.remove(tmp_img)
         else:
-            print(f"❌ Image generation failed for video {vid_id}.")
+            print(f"❌ Thumbnail generation failed for {vid_id}.")
 
 
 if __name__ == "__main__":
