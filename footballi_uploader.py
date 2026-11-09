@@ -240,96 +240,57 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
     return video_id
 
 
-def fix_existing_thumbnails(youtube, channel_videos, history):
+def fix_existing_thumbnails_fast(youtube, channel_videos, history):
     """
-    Backfills branded 1280x720 HD thumbnails (with Persian headline + Footballi badge)
-    for older long-form videos on the channel.
+    Lightweight, ultra-fast thumbnail backfill: checks at most 2 videos per run
+    with a strict 15s timeout so the workflow never gets stuck.
     """
     fixed_set = set(history.get("fixed_thumbs", []))
-    candidates_to_fix = []
+    candidates = [
+        v for v in channel_videos
+        if v["video_id"] not in fixed_set and "#shorts" not in v["title"].lower()
+    ]
 
-    for v in channel_videos:
-        vid_id = v["video_id"]
-        title = v["title"]
-        if vid_id in fixed_set:
-            continue
-        if "#shorts" in title.lower():
-            fixed_set.add(vid_id)
-            history["fixed_thumbs"].append(vid_id)
-            continue
-        candidates_to_fix.append(v)
-
-    if not candidates_to_fix:
+    if not candidates:
         return
 
-    print(f"[THUMB-REPAIR] Checking {len(candidates_to_fix)} existing long-form videos for Branded HD upgrade...")
+    print(f"[THUMB-REPAIR] Quick check on {len(candidates)} legacy videos...")
+    web_urls = [u for u in reversed(history.get("uploaded_urls", [])) if "/video/" in str(u)][:12]
 
-    web_urls = [
-        u for u in reversed(history.get("uploaded_urls", []))
-        if isinstance(u, str) and ("/video/" in u or "/news/video" in u)
-    ][:80]
+    vf_scale = "scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,crop=1280:720,unsharp=5:5:0.7:3:3:0.0"
 
-    repaired_count = 0
-    vf_scale = (
-        "scale=1280:720:flags=lanczos:force_original_aspect_ratio=increase,"
-        "crop=1280:720,"
-        "unsharp=5:5:0.7:3:3:0.0"
-    )
-
-    for v in candidates_to_fix:
-        if repaired_count >= 3:
-            break
-
+    for v in candidates[:2]:
         vid_id = v["video_id"]
-        ref_t = v["ref_title"]
         matched_mp4 = None
 
         for page_u in web_urls:
             details = extract_video_details_from_page(page_u)
-            if not details or not details.get("title"):
-                continue
-            if is_duplicate_title(details["title"], {ref_t, v["title"]}):
+            if details and is_duplicate_title(details.get("title", ""), {v["ref_title"], v["title"]}):
                 matched_mp4 = details.get("mp4_url")
                 break
 
-        if not matched_mp4:
-            history["fixed_thumbs"].append(vid_id)
-            save_history(history)
-            continue
+        if matched_mp4:
+            out_jpg = f"repair_thumb_{vid_id}.jpg"
+            cmd = ["ffmpeg", "-y", "-v", "error", "-ss", "20", "-i", sanitize_url(matched_mp4), "-vf", f"thumbnail=15,{vf_scale}", "-frames:v", "1", "-q:v", "2", out_jpg]
+            try:
+                subprocess.run(cmd, timeout=20)
+                if os.path.exists(out_jpg) and os.path.getsize(out_jpg) > 10_000:
+                    short_hl = v["title"].split("|")[0].strip()
+                    render_branded_overlay(out_jpg, short_hl, is_summary=is_match_summary(v["title"]))
+                    youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(out_jpg)).execute()
+                    print(f"[THUMB-REPAIR] Repaired: {short_hl[:35]}")
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(out_jpg):
+                    os.remove(out_jpg)
 
-        out_jpg = f"repair_thumb_{vid_id}.jpg"
-        cmd = [
-            "ffmpeg", "-y", "-v", "error",
-            "-ss", "25",
-            "-i", sanitize_url(matched_mp4),
-            "-vf", f"thumbnail=25,{vf_scale}",
-            "-frames:v", "1",
-            "-q:v", "2",
-            out_jpg
-        ]
-        try:
-            subprocess.run(cmd, timeout=40)
-            if os.path.exists(out_jpg) and os.path.getsize(out_jpg) > 10_000:
-                short_headline = v["title"].split("|")[0].strip()
-                is_sum = is_match_summary(v["title"])
-                render_branded_overlay(out_jpg, short_headline, is_summary=is_sum)
-
-                youtube.thumbnails().set(
-                    videoId=vid_id, media_body=MediaFileUpload(out_jpg)
-                ).execute()
-                print(f"[THUMB-REPAIR] Upgraded Branded HD thumbnail for ({vid_id}): {short_headline[:40]}")
-                repaired_count += 1
-        except Exception as e:
-            print(f"[WARN] Could not repair thumbnail for {vid_id}: {e}")
-        finally:
-            if os.path.exists(out_jpg):
-                os.remove(out_jpg)
-            history["fixed_thumbs"].append(vid_id)
-            save_history(history)
+        history["fixed_thumbs"].append(vid_id)
+        save_history(history)
 
 
 def main():
-    print("[START] Footballi Official News Agency Bot starting (Branded HD Thumbnail Edition)...")
+    print("[START] Footballi Official News Agency Bot starting (Fast HD Thumbnail Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -337,8 +298,8 @@ def main():
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
 
-    # Upgrade up to 3 older long-form video thumbnails per run with branded overlays
-    fix_existing_thumbnails(youtube, channel_videos, history)
+    # Quick & light check (max 2 videos per run)
+    fix_existing_thumbnails_fast(youtube, channel_videos, history)
 
     if uploads_today >= MAX_DAILY_UPLOADS:
         print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
