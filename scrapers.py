@@ -20,7 +20,7 @@ def clean_scraped_title(raw_title):
         return ""
     t = re.sub(r"play_arrow\s*\d+:\d+", " ", raw_title, flags=re.IGNORECASE)
     t = re.sub(r"(?:comment|visibility|remove_red_eye|videocam|play_circle)\s*[\d,]*", " ", t, flags=re.IGNORECASE)
-    t = re.sub(r"^\s*\d+:\d+\s*", " ", t)
+    t = re.sub(r"\b\d+:\d+\b", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -88,12 +88,6 @@ def extract_title_for_link(a_tag):
 
 
 def scrape_website_candidates(history, existing_titles, save_history_fn):
-    """
-    Crawls all Footballi video & match summary hubs.
-    Captures:
-    1. Direct /video/<id> links.
-    2. /news/<id> links ONLY when they are Match Summaries ('خلاصه بازی') or on '/news/video'.
-    """
     candidates = []
     seen_in_this_scan = set()
     permanently_done_urls = set(history.get("uploaded_urls", []))
@@ -110,50 +104,55 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
             soup = BeautifulSoup(resp.text, "html.parser")
             page_matches = 0
+            page_summaries = 0
 
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
-                is_vid_link = bool(re.search(r"/video/\d+", href))
-                is_news_link = bool(re.search(r"/news/\d+", href))
-
-                if not is_vid_link and not is_news_link:
+                # Strictly match /video/<numeric_id> links
+                vid_id_match = re.search(r"/video/(\d+)", href)
+                if not vid_id_match:
                     continue
 
+                vid_num_id = vid_id_match.group(1)
+                # Normalize URL by numeric video ID so differently slugged links never duplicate
+                canonical_key = f"{BASE_URL}/video/{vid_num_id}"
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
-                if full_url in seen_in_this_scan or full_url in permanently_done_urls:
+
+                if canonical_key in seen_in_this_scan or canonical_key in permanently_done_urls or full_url in permanently_done_urls:
                     continue
 
                 clean_t = extract_title_for_link(a)
                 if not clean_t or len(clean_t) < 6:
                     continue
 
-                is_sum = is_match_summary(clean_t)
-
-                # If it's a /news/<id> link (not /video/<id>), ONLY accept it if its title is a Match Summary!
-                if is_news_link and not is_vid_link and not is_sum:
-                    continue
-
                 if is_duplicate_title(clean_t, existing_titles):
-                    seen_in_this_scan.add(full_url)
+                    seen_in_this_scan.add(canonical_key)
                     continue
 
                 if not is_safe_by_keywords(clean_t):
-                    seen_in_this_scan.add(full_url)
+                    seen_in_this_scan.add(canonical_key)
                     permanently_done_urls.add(full_url)
                     history["uploaded_urls"].append(full_url)
+                    history["uploaded_urls"].append(canonical_key)
                     continue
 
-                seen_in_this_scan.add(full_url)
+                is_sum = is_match_summary(clean_t)
+                if is_sum:
+                    page_summaries += 1
+
+                seen_in_this_scan.add(canonical_key)
                 page_matches += 1
                 candidates.append({
                     "url": full_url,
+                    "canonical_id": vid_num_id,
                     "title": clean_t,
                     "source": "web",
                     "is_short": False,
                     "is_summary": is_sum
                 })
 
-            print(f"[CRAWLER] Scanned {decoded_page_url} -> {page_matches} new candidates")
+            if page_matches > 0:
+                print(f"[CRAWLER] {decoded_page_url} -> {page_matches} videos ({page_summaries} Match Summaries)")
 
         except Exception as e:
             print(f"[WARN] Failed crawling {decoded_page_url}: {e}")
@@ -164,12 +163,14 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
 def extract_video_details_from_page(page_url):
     """
-    Strictly extracts the video belonging to this exact article/video page:
-    - If page_url is a /news/<id> summary article, it first strips sidebars/related sections,
-      then checks if the article body links to a dedicated /video/<id> page or has an inline <video> player.
-    - Verifies that the extracted video title matches the article topic (zero sidebar mixups).
+    Precision extractor for Footballi's Angular SSR pages:
+    Finds the exact .mp4 stream belonging to THIS video ID (ignoring global featured/sidebar videos).
     """
     clean_page_url = sanitize_url(page_url)
+    id_match = re.search(r"/video/(\d+)", clean_page_url)
+    if not id_match:
+        return None
+    target_vid_id = id_match.group(1)
 
     try:
         resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
@@ -178,81 +179,50 @@ def extract_video_details_from_page(page_url):
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
 
-        # 1. Strip all sidebars, related widgets, footers, and navbars FIRST!
-        for junk in soup.find_all(["aside", "footer", "nav", "header"]):
-            junk.decompose()
-        for junk_div in soup.find_all(
-            "div",
-            class_=re.compile(r"related|sidebar|suggest|more|popular|widget|most-viewed|latest", re.I)
-        ):
-            junk_div.decompose()
-
         h1 = soup.find("h1")
         page_title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
         if not page_title:
             return None
 
-        tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")]
-        tags_text = " ".join(tags_list)
+        # Only extract tags inside the main article area (not global footer links)
+        main_container = soup.find("main") or soup.find("article") or soup
+        tags_list = [t.get_text(strip=True) for t in main_container.select("a[href*='/tag/']")]
+        tags_text = " ".join(tags_list[:15])
 
         if not is_safe_by_keywords(page_title, tags_text):
             return {"rejected_forever": True}
 
-        # 2. If this is a /news/<id> article, check if the main article body contains a dedicated /video/<id> link
-        if "/news/" in clean_page_url:
-            vid_links = [
-                a["href"] for a in soup.find_all("a", href=re.compile(r"/video/\d+"))
-            ]
-            if vid_links:
-                dedicated_vid_url = sanitize_url(urljoin(BASE_URL, vid_links[0]).split("?")[0])
-                return extract_video_details_from_page(dedicated_vid_url)
-
+        unescaped_html = html.replace("\\/", "/").replace("&quot;", '"')
         mp4_url = None
         thumb_url = None
 
-        # 3. Check JSON-LD VideoObject
-        for script in soup.find_all("script", type="application/ld+json"):
-            try:
-                ld_data = json.loads(script.string or "")
-                items = ld_data if isinstance(ld_data, list) else [ld_data]
-                for obj in items:
-                    if isinstance(obj, dict) and obj.get("@type") == "VideoObject":
-                        c_url = obj.get("contentUrl") or obj.get("embedUrl") or ""
-                        if ".mp4" in c_url:
-                            mp4_url = c_url
-                        if obj.get("thumbnailUrl"):
-                            t_u = obj["thumbnailUrl"]
-                            thumb_url = t_u[0] if isinstance(t_u, list) else t_u
-            except Exception:
-                pass
+        # Strategy 1: Look in the HTML/JSON window right around the target video ID (target_vid_id)
+        # In Footballi's Angular TransferState, the video object contains `"id":1073641` (or `"videoId":1073641`) right next to its `.mp4` URL!
+        for m in re.finditer(rf"\b{target_vid_id}\b", unescaped_html):
+            pos = m.start()
+            window = unescaped_html[max(0, pos - 1500): min(len(unescaped_html), pos + 2500)]
+            window_mp4s = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', window)
+            if window_mp4s:
+                mp4_url = window_mp4s[0]
+                break
 
-        # 4. Check <video> / <source> tag inside main article
+        # Strategy 2: Check direct <video> tag in main content (after stripping aside/related)
         if not mp4_url:
+            for junk in soup.find_all(["aside", "footer", "nav"]):
+                junk.decompose()
             vid_tag = soup.find("video")
             if vid_tag:
-                if vid_tag.get("src") and ".mp4" in vid_tag.get("src", ""):
-                    mp4_url = vid_tag["src"]
-                else:
-                    src_tag = vid_tag.find("source", src=True)
-                    if src_tag and ".mp4" in src_tag["src"]:
-                        mp4_url = src_tag["src"]
-                if not thumb_url and vid_tag.get("poster"):
+                src = vid_tag.get("src") or (vid_tag.find("source", src=True)["src"] if vid_tag.find("source", src=True) else None)
+                if src and ".mp4" in src:
+                    mp4_url = src
+                if vid_tag.get("poster"):
                     thumb_url = vid_tag.get("poster")
 
-        # 5. Check remaining cleaned main article HTML (ONLY on /video/<id> pages, never on /news/ pages)
-        if not mp4_url and "/video/" in clean_page_url:
-            cleaned_html = str(soup).replace("\\/", "/")
-            mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', cleaned_html)
-            if mp4_matches:
-                for q in ["1080", "720", "high", "hd"]:
-                    for m in mp4_matches:
-                        if q in m.lower():
-                            mp4_url = m
-                            break
-                    if mp4_url:
-                        break
-                if not mp4_url:
-                    mp4_url = mp4_matches[0]
+        # Strategy 3: Check meta og:video or JSON-LD VideoObject
+        if not mp4_url:
+            og_vid = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:url") or soup.find("meta", property="og:video:secure_url")
+            if og_vid and og_vid.get("content") and ".mp4" in og_vid.get("content", ""):
+                mp4_url = og_vid["content"]
 
         if not mp4_url:
             return None
