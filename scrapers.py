@@ -1,6 +1,7 @@
 # scrapers.py
 import os
 import re
+import json
 import time
 from urllib.parse import urljoin, unquote
 import requests
@@ -28,7 +29,6 @@ def normalize_persian(text):
     if not text:
         return ""
     t = text.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("‌", " ")
-    # Convert Persian/Arabic digits to English digits for consistent score matching
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
     arabic_digits = "٠١٢٣٤٥٦٧٨٩"
     for i in range(10):
@@ -40,13 +40,9 @@ def normalize_persian(text):
 
 
 def is_match_summary(title):
+    """Strictly returns True ONLY if the title explicitly states it is a Full Match Summary"""
     t = normalize_persian(title)
-    if any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS):
-        return True
-    # Also detect score patterns like "تراکتور 2 0 خیبر" or "استقلال 1 1"
-    if re.search(r"\b\d+\s+\d+\b", t) and ("خلاصه" in t or "بازی" in t or "گل" in t):
-        return True
-    return False
+    return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
 
 
 def is_duplicate_title(candidate_title, existing_titles_set):
@@ -60,8 +56,7 @@ def is_duplicate_title(candidate_title, existing_titles_set):
             continue
         if norm_cand == norm_ex:
             return True
-        # Only treat as substring duplicate if the full candidate title is inside an existing title
-        if len(norm_cand) >= 18 and norm_cand in norm_ex:
+        if len(norm_cand) >= 16 and (norm_cand in norm_ex or norm_ex in norm_cand):
             return True
     return False
 
@@ -76,39 +71,26 @@ def is_safe_by_keywords(title, tags_text=""):
 
 
 def extract_title_for_link(a_tag):
-    """Extracts the cleanest title from an <a> tag, its attributes, or parent card headings"""
     for attr in ["title", "aria-label", "data-title"]:
         val = a_tag.get(attr)
         if val and len(clean_scraped_title(val)) >= 6:
             return clean_scraped_title(val)
 
-    # Check inner heading tags (h1, h2, h3, h4, span.title)
     for h_tag in a_tag.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span"]):
         txt = clean_scraped_title(h_tag.get_text(" ", strip=True))
         if len(txt) >= 8:
             return txt
 
-    # Fallback to full text inside <a>
     txt = clean_scraped_title(a_tag.get_text(" ", strip=True))
     if len(txt) >= 6:
         return txt
-
-    # Check parent container if <a> is just an overlay link
-    parent = a_tag.parent
-    if parent:
-        txt = clean_scraped_title(parent.get_text(" ", strip=True))
-        if 6 <= len(txt) <= 140:
-            return txt
 
     return ""
 
 
 def scrape_website_candidates(history, existing_titles, save_history_fn):
     """
-    Deep site-wide crawler across Footballi.net:
-    1. Scans all configured listing/tag/competition URLs.
-    2. Captures both /video/<id> links AND /news/<id> articles on summary/video pages.
-    3. Prioritizes Match Summaries first.
+    Strictly crawls ONLY dedicated '/video/<id>' pages (never text '/news/' pages that lack a main video player).
     """
     candidates = []
     seen_in_this_scan = set()
@@ -117,13 +99,10 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
     for raw_page_url in VIDEO_LIST_URLS:
         page_url = sanitize_url(raw_page_url)
         decoded_page_url = unquote(page_url)
-        is_summary_hub = ("خلاصه" in decoded_page_url)
-        is_video_hub = ("/news/video" in decoded_page_url or decoded_page_url.endswith("/video"))
 
         try:
             resp = requests.get(page_url, headers=HEADERS, timeout=20)
             if resp.status_code != 200:
-                print(f"[WARN] HTTP {resp.status_code} on {decoded_page_url}")
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -131,23 +110,12 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
-                if not href or href.startswith("#") or href.startswith("javascript:"):
-                    continue
-
-                # Determine if link points to a video page or a news article on a video/summary hub
-                is_vid_link = ("/video/" in href)
-                is_news_article = bool(re.search(r"/news/\d+", href))
-
-                if not is_vid_link and not (is_news_article and (is_summary_hub or is_video_hub)):
+                # CRITICAL FIX: Only accept genuine /video/<id> pages!
+                # Never scrape /news/<id> text articles because they don't have a main video player and cause sidebar mp4 mixups!
+                if not re.search(r"/video/\d+", href):
                     continue
 
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
-
-                # Skip navigation/category hubs
-                if any(full_url.endswith(s) for s in ["/video", "/news/video", "/news/latest", "/news"]):
-                    continue
-                if "خلاصه-بازی" in unquote(full_url) and "/news/" in full_url and not re.search(r"/news/\d+", full_url):
-                    continue
 
                 if full_url in seen_in_this_scan or full_url in permanently_done_urls:
                     continue
@@ -155,9 +123,6 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                 clean_t = extract_title_for_link(a)
                 if not clean_t or len(clean_t) < 6:
                     continue
-
-                # If it's a /news/<id> link from the general hub, only take it if it's a summary or video
-                is_sum = is_summary_hub or is_match_summary(clean_t)
 
                 if is_duplicate_title(clean_t, existing_titles):
                     seen_in_this_scan.add(full_url)
@@ -168,6 +133,9 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                     permanently_done_urls.add(full_url)
                     history["uploaded_urls"].append(full_url)
                     continue
+
+                # Strictly check if title itself is a Match Summary
+                is_sum = is_match_summary(clean_t)
 
                 seen_in_this_scan.add(full_url)
                 page_matches += 1
@@ -180,7 +148,7 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                 })
 
             if page_matches > 0:
-                print(f"[CRAWLER] Found {page_matches} fresh candidates on {decoded_page_url}")
+                print(f"[CRAWLER] Found {page_matches} video candidates on {decoded_page_url}")
 
         except Exception as e:
             print(f"[WARN] Failed crawling {decoded_page_url}: {e}")
@@ -189,40 +157,16 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
     return candidates
 
 
-def extract_best_poster_url(soup, html):
-    candidates = []
-
-    vid_tag = soup.find("video")
-    if vid_tag and vid_tag.get("poster"):
-        candidates.append(vid_tag.get("poster"))
-
-    js_posters = re.findall(
-        r'poster\s*[:=]\s*["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp))["\']',
-        html,
-        flags=re.IGNORECASE
-    )
-    candidates.extend(js_posters)
-
-    for meta_prop in ["og:image", "twitter:image"]:
-        m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
-        if m_tag and m_tag.get("content"):
-            candidates.append(m_tag.get("content"))
-
-    for raw_img in candidates:
-        u = sanitize_url(raw_img)
-        if not u or "logo" in u.lower() or "default" in u.lower() or "avatar" in u.lower():
-            continue
-        return u
-    return None
-
-
 def extract_video_details_from_page(page_url):
     """
-    Deep extractor for both /video/<id> and /news/<id> pages on Footballi.net:
-    1. Scans direct .mp4 links in HTML/JS/JSON-LD (prefers 1080p > 720p).
-    2. If a /news/<id> article links to an embedded /video/<id> iframe/page, follows it automatically!
+    Strictly extracts ONLY the primary video of this exact page:
+    1. Removes sidebars, related videos, and footers from the HTML before searching.
+    2. Checks JSON-LD VideoObject / primary <video> tag first so it NEVER grabs a sidebar video!
     """
     clean_page_url = sanitize_url(page_url)
+    if not re.search(r"/video/\d+", clean_page_url):
+        return None
+
     try:
         resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
         if resp.status_code != 200:
@@ -232,6 +176,8 @@ def extract_video_details_from_page(page_url):
 
         h1 = soup.find("h1")
         title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
+        if not title:
+            return None
 
         tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")]
         tags_text = " ".join(tags_list)
@@ -239,47 +185,63 @@ def extract_video_details_from_page(page_url):
         if not is_safe_by_keywords(title, tags_text):
             return {"rejected_forever": True}
 
-        # Unescape any JSON-escaped slashes (https:\/\/...)
-        unescaped_html = html.replace("\\/", "/")
-        mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', unescaped_html)
-
-        # If this is a /news/ article without direct mp4, check if it embeds a /video/<id> link
-        if not mp4_matches and "/news/" in clean_page_url:
-            embedded_vid_links = re.findall(r'href=["\'](/video/\d+[^"\']*)["\']', html)
-            if embedded_vid_links:
-                sub_url = sanitize_url(urljoin(BASE_URL, embedded_vid_links[0]))
-                sub_resp = requests.get(sub_url, headers=HEADERS, timeout=15)
-                if sub_resp.status_code == 200:
-                    sub_html = sub_resp.text.replace("\\/", "/")
-                    mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', sub_html)
+        # Remove sidebars, footers, navs, and related video widgets so we NEVER mix up videos!
+        for junk in soup.find_all(["aside", "footer", "nav"]):
+            junk.decompose()
+        for junk_div in soup.find_all("div", class_=re.compile(r"related|sidebar|suggest|more|popular|widget", re.I)):
+            junk_div.decompose()
 
         mp4_url = None
-        if mp4_matches:
-            for q in ["1080", "720", "high", "hd"]:
-                for m in mp4_matches:
-                    if q in m.lower():
-                        mp4_url = m
-                        break
-                if mp4_url:
-                    break
-            if not mp4_url:
-                mp4_url = mp4_matches[0]
+        thumb_url = None
 
+        # Priority 1: Official JSON-LD VideoObject schema for this exact page
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                ld_data = json.loads(script.string or "")
+                items = ld_data if isinstance(ld_data, list) else [ld_data]
+                for obj in items:
+                    if isinstance(obj, dict) and obj.get("@type") == "VideoObject":
+                        if obj.get("contentUrl") and ".mp4" in obj.get("contentUrl", ""):
+                            mp4_url = obj["contentUrl"]
+                        if obj.get("thumbnailUrl"):
+                            t_u = obj["thumbnailUrl"]
+                            thumb_url = t_u[0] if isinstance(t_u, list) else t_u
+            except Exception:
+                pass
+
+        # Priority 2: Direct <video> / <source> element inside the main content area
         if not mp4_url:
             vid_tag = soup.find("video")
-            if vid_tag and vid_tag.get("src"):
-                mp4_url = vid_tag["src"]
+            if vid_tag:
+                if vid_tag.get("src") and ".mp4" in vid_tag.get("src", ""):
+                    mp4_url = vid_tag["src"]
+                else:
+                    src_tag = vid_tag.find("source", src=True)
+                    if src_tag and ".mp4" in src_tag["src"]:
+                        mp4_url = src_tag["src"]
+                if not thumb_url and vid_tag.get("poster"):
+                    thumb_url = vid_tag.get("poster")
+
+        # Priority 3: Cleaned main container HTML only (after sidebars were destroyed)
+        if not mp4_url:
+            main_html = str(soup).replace("\\/", "/")
+            mp4_matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', main_html)
+            if mp4_matches:
+                mp4_url = mp4_matches[0]
 
         if not mp4_url:
             return None
 
-        thumb_url = extract_best_poster_url(soup, unescaped_html)
+        if not thumb_url:
+            og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
+            if og_img and og_img.get("content"):
+                thumb_url = og_img.get("content")
 
         return {
             "mp4_url": sanitize_url(mp4_url),
             "title": title,
             "tags_text": tags_text,
-            "thumb_url": thumb_url
+            "thumb_url": sanitize_url(thumb_url) if thumb_url else None
         }
     except Exception as e:
         print(f"[WARN] Error extracting details from {clean_page_url}: {e}")
