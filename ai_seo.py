@@ -3,9 +3,15 @@ import os
 import re
 import json
 import requests
+from openai import OpenAI
 from config import PROTO
 
 GOOGLE_API_BASE = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
+
+# تنظیمات اتصال به پلتفرم هوش مصنوعی آروان‌کلود
+ARVAN_API_KEY = os.environ.get("ARVAN_API_KEY", "").strip()
+ARVAN_BASE_URL = os.environ.get("ARVAN_BASE_URL", "https://api.arvancloud.ir/v1").strip()
+ARVAN_SEO_MODEL = "claude-sonnet-4-6"  # یا مدل متنی مدنظر در پنل آروان شما
 
 
 def sanitize_url(u):
@@ -18,10 +24,143 @@ def sanitize_url(u):
     return s
 
 
+# --------------------------------------------------------------------------
+# ۱. ممیزی رایگان کپی‌رایت با جمنای (فراخوانی تکی برای آپلودر)
+# --------------------------------------------------------------------------
+def ai_free_copyright_audit(video_title: str) -> bool:
+    """
+    ممیزی سریع کپی‌رایت بر اساس سیاست Zero-Trust از طریق اکانت رایگان گوگل استودیو.
+    رد قطعی فوتبال خارجی/لیگ نخبگان آسیا و تایید فوتبال و حواشی داخلی.
+    """
+    google_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not google_key:
+        print("[AUDIT-WARN] GEMINI_API_KEY not found. Skipping audit.")
+        return False
+
+    prompt = f"""
+تو ممیز ارشد کپی‌رایت یوتیوب هستی بر اساس سیاست Zero-Trust رسانه فوتبالی.
+
+قوانین ممیزی:
+۱. مجاز (SAFE): فقط فوتبال و حواشی داخلی ایران (لیگ برتر خلیج فارس، جام حذفی، لیگ آزادگان، فوتبال بانوان، نشست‌های خبری، مصاحبه مربیان/بازیکنان داخلی، کارشناسی داوری و تولیدات باشگاه‌های داخلی).
+۲. غیرمجاز (REJECT):
+   - هرگونه خلاصه بازی، تصویر یا بریده مسابقات لیگ‌های اروپایی و بین‌المللی (چمپیونزلیگ، لیگ برتر انگلیس، لالیگا، بوندسلیگا و...).
+   - هرگونه تصویر یا خلاصه بازی‌های لیگ نخبگان آسیا (ACL Elite / ACL Two) حتی اگر استقلال، پرسپولیس، سپاهان یا تراکتور بازی کرده باشند.
+
+عنوان ویدیو: "{video_title}"
+
+پاسخ را دقیقاً و فقط در یک کلمه ارسال کن: SAFE یا REJECT
+"""
+
+    models_to_try = [
+        "models/gemini-flash-lite-latest",
+        "models/gemini-2.0-flash",
+        "models/gemini-flash-latest"
+    ]
+
+    for model_name in models_to_try:
+        try:
+            url = f"{GOOGLE_API_BASE}/{model_name}:generateContent"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.0}
+            }
+            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=25)
+            if resp.status_code == 200:
+                verdict = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
+                is_safe = "SAFE" in verdict and "REJECT" not in verdict
+                print(f"[FREE-AUDIT] Model ({model_name}) -> '{video_title}': {verdict}")
+                return is_safe
+        except Exception:
+            continue
+
+    return False
+
+
+# --------------------------------------------------------------------------
+# ۲. تولید سئو، تایتل ژورنالیستی و پلی‌لیست در آروان‌کلود
+# --------------------------------------------------------------------------
+def arvan_generate_single_seo(video_title: str, is_short: bool = False) -> dict:
+    """
+    تولید عنوان ژورنالیستی رسمی خبرگزاری فوتبالی، توضیحات، هشتگ‌ها و پلی‌لیست
+    با استفاده از سرویس هوش مصنوعی آروان‌کلود
+    """
+    if not ARVAN_API_KEY:
+        print("[ARVAN-SEO] ARVAN_API_KEY not configured. Falling back to default metadata.")
+        short_suffix = " #shorts" if is_short else ""
+        return {
+            "title": f"{video_title}{short_suffix}"[:100],
+            "description": f"{video_title}\n\nرسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات و حواشی فوتبال ایران.\n\n#فوتبالی #فوتبال_ایران #لیگ_برتر",
+            "playlist": "ویدیوهای کوتاه (Shorts)" if is_short else "مصاحبه و حواشی فوتبال ایران",
+            "tags": ["فوتبالی", "فوتبال ایران", "لیگ برتر"]
+        }
+
+    system_prompt = """تو سردبیر ارشد و استراتژیست سئوی یوتیوب در رسانه رسمی «فوتبالی» هستی.
+برای ویدیوی ورزشی تاییدشده، متادیتای ژورنالیستی و سئو شده به زبان فارسی تولید کن.
+
+اصول نگارش:
+۱. عنوان (title): رسمی، ژورنالیستی (مانند اسکای اسپورتس یا ورزش ۳)، حداکثر ۸۵ کاراکتر، بدون کلیک‌بیت سخیف یا اموجی‌های نامرتب.
+   - خلاصه مسابقات: "خلاصه بازی [میزبان] [نتیجه] [میهمان] | هفته [X] لیگ برتر"
+   - مصاحبه/نشست خبری: "[نام شخص]: [مهم‌ترین تیتر خبری] | حواشی [نام تیم]"
+   - سایر حواشی: "[موضوع دقیق ویدیو] | [نام تیم یا رویداد]"
+   - اگر ویدیو شورت است، در انتهای عنوان عبارت " #shorts" را درج کن.
+۲. توضیحات (description) در ۳ بخش:
+   - بند ۱: دو جمله خلاصه و خبری درباره رویداد همراه با کلمات کلیدی پرتکرار جستجو.
+   - بند ۲: متن ثابت رسانه: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
+   - بند ۳: ۶ تا ۸ هشتگ رسمی فارسی متناسب با ویدیو.
+۳. دسته‌بندی و پلی‌لیست (playlist): دقیقاً یکی از این سه مورد باشد:
+   - "خلاصه بازی‌ها" (صرفاً برای خلاصه کامل بازی)
+   - "ویدیوهای کوتاه (Shorts)" (در صورت شورت بودن)
+   - "مصاحبه و حواشی فوتبال ایران" (برای مصاحبه‌ها، اخبار و حواشی)
+۴. تگ‌ها (tags): آرایه‌ای شامل ۸ تا ۱۰ کلیدواژه فارسی با سرچ بالا برای ویدیوی جاری.
+
+خروجی باید الزاماً و بدون هیچ پیش‌گفتاری یک شیء JSON با ساختار زیر باشد:
+{
+  "title": "...",
+  "description": "...",
+  "playlist": "...",
+  "tags": ["...", "..."]
+}"""
+
+    user_prompt = f"عنوان ورودی ویدیو: {video_title}\nویدیو عمودی/شورت: {is_short}"
+
+    try:
+        client = OpenAI(
+            api_key=ARVAN_API_KEY,
+            base_url=ARVAN_BASE_URL
+        )
+
+        response = client.chat.completions.create(
+            model=ARVAN_SEO_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+
+        content = response.choices[0].message.content.strip()
+        data = json.loads(content)
+        print(f"[ARVAN-SEO] Optimized: {data.get('title')}")
+        return data
+
+    except Exception as e:
+        print(f"[ARVAN-SEO Error] Generation failed: {e}. Using fallback.")
+        short_suffix = " #shorts" if is_short else ""
+        return {
+            "title": f"{video_title}{short_suffix}"[:100],
+            "description": f"{video_title}\n\nرسانه رسمی فوتبالی؛ پوشش زنده مسابقات فوتبال ایران.\n\n#فوتبالی #فوتبال_ایران",
+            "playlist": "ویدیوهای کوتاه (Shorts)" if is_short else "مصاحبه و حواشی فوتبال ایران",
+            "tags": ["فوتبالی", "فوتبال ایران", "لیگ برتر"]
+        }
+
+
+# --------------------------------------------------------------------------
+# ۳. ارزیابی دسته‌جمعی با جمنای (نسخه رایگان قبلی)
+# --------------------------------------------------------------------------
 def ai_batch_evaluate(candidates):
     """
     100% Free SEO & Copyright Evaluation Engine using Google AI Studio free tier.
-    Generates authoritative News Agency Persian Titles, Descriptions, and Tags with $0 cost.
     """
     if not candidates:
         return {}
@@ -89,7 +228,6 @@ Candidates:
 
     models_to_try = [
         "models/gemini-flash-lite-latest",
-        "models/gemini-3.5-flash-lite",
         "models/gemini-2.0-flash",
         "models/gemini-flash-latest"
     ]
@@ -110,7 +248,7 @@ Candidates:
                 result_map = {item["index"]: item for item in parsed if "index" in item}
                 print(f"[FREE-SEO] Model ({model_name}) evaluated and SEO-optimized {len(result_map)} videos for $0.")
                 return result_map
-        except Exception as e:
+        except Exception:
             continue
 
     return {}
