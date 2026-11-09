@@ -116,6 +116,34 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
     return candidates
 
 
+def extract_best_poster_url(soup, html):
+    """Finds the highest quality original poster image from the video page without any resize suffixes"""
+    candidates = []
+
+    # 1. Check <video poster="..."> attribute
+    vid_tag = soup.find("video")
+    if vid_tag and vid_tag.get("poster"):
+        candidates.append(vid_tag.get("poster"))
+
+    # 2. Check poster URL inside JS player configuration
+    js_posters = re.findall(r'poster\s*[:=]\s*["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp))["\']', html, flags=re.IGNORECASE)
+    candidates.extend(js_posters)
+
+    # 3. Check og:image and twitter:image meta tags
+    for meta_prop in ["og:image", "twitter:image"]:
+        m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
+        if m_tag and m_tag.get("content"):
+            candidates.append(m_tag.get("content"))
+
+    for raw_img in candidates:
+        u = sanitize_url(raw_img)
+        if not u or "logo" in u.lower() or "default" in u.lower():
+            continue
+        return u
+
+    return None
+
+
 def extract_video_details_from_page(page_url):
     clean_page_url = sanitize_url(page_url)
     try:
@@ -152,13 +180,10 @@ def extract_video_details_from_page(page_url):
             if vid_tag and vid_tag.get("src"):
                 mp4_url = vid_tag["src"]
 
-        thumb_url = None
-        og_img = soup.find("meta", property="og:image")
-        if og_img and og_img.get("content"):
-            thumb_url = sanitize_url(og_img["content"])
-
         if not mp4_url:
             return None
+
+        thumb_url = extract_best_poster_url(soup, html)
 
         return {
             "mp4_url": sanitize_url(mp4_url),
