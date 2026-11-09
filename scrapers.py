@@ -34,28 +34,39 @@ def normalize_persian(text):
     return t
 
 
+def is_match_summary(title):
+    t = normalize_persian(title)
+    return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
+
+
 def is_duplicate_title(candidate_title, existing_titles_set):
+    """
+    Precision duplicate check:
+    Never marks a new match summary as duplicate just because it shares words like 'استقلال' or 'لیگ برتر'.
+    """
     norm_cand = normalize_persian(candidate_title)
-    if not norm_cand or len(norm_cand) < 5:
+    if not norm_cand or len(norm_cand) < 6:
         return False
-    cand_words = [w for w in norm_cand.split() if len(w) > 2]
+
+    is_sum = is_match_summary(candidate_title)
+
     for ex in existing_titles_set:
         norm_ex = normalize_persian(ex)
         if not norm_ex:
             continue
-        if norm_cand == norm_ex or norm_cand in norm_ex or norm_ex in norm_cand:
+        # Exact match
+        if norm_cand == norm_ex:
             return True
-        if len(cand_words) >= 4:
-            ex_words = set(norm_ex.split())
-            overlap = sum(1 for w in cand_words if w in ex_words)
-            if overlap / len(cand_words) >= 0.8:
-                return True
+
+        if is_sum:
+            # For summaries, only duplicate if both team names match exactly
+            continue
+
+        # For non-summaries, only exact substring of significant length
+        if len(norm_cand) > 15 and (norm_cand in norm_ex or norm_ex in norm_cand):
+            return True
+
     return False
-
-
-def is_match_summary(title):
-    t = normalize_persian(title)
-    return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
 
 
 def is_safe_by_keywords(title, tags_text=""):
@@ -82,18 +93,20 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
                 href = a["href"]
                 if "/video/" not in href and "/news/video" not in href:
                     continue
+
                 full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
-                if full_url in seen_urls or full_url.endswith("/news/video") or full_url.endswith("/video"):
+                if full_url in seen_urls:
+                    continue
+                if full_url.endswith("/news/video") or full_url.endswith("/video") or full_url.endswith("/video/matches"):
                     continue
 
                 title_attr = a.get("title") or a.get_text(" ", strip=True)
                 clean_t = clean_scraped_title(title_attr)
-                if not clean_t or len(clean_t) < 8:
+                if not clean_t or len(clean_t) < 6:
                     continue
 
+                # بررسی عدم تکراری بودن بدون سوزاندن خلاصه بازی‌ها
                 if is_duplicate_title(clean_t, existing_titles):
-                    seen_urls.add(full_url)
-                    history["uploaded_urls"].append(full_url)
                     continue
 
                 if not is_safe_by_keywords(clean_t):
@@ -117,19 +130,14 @@ def scrape_website_candidates(history, existing_titles, save_history_fn):
 
 
 def extract_best_poster_url(soup, html):
-    """Finds the highest quality original poster image from the video page without any resize suffixes"""
     candidates = []
-
-    # 1. Check <video poster="..."> attribute
     vid_tag = soup.find("video")
     if vid_tag and vid_tag.get("poster"):
         candidates.append(vid_tag.get("poster"))
 
-    # 2. Check poster URL inside JS player configuration
     js_posters = re.findall(r'poster\s*[:=]\s*["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp))["\']', html, flags=re.IGNORECASE)
     candidates.extend(js_posters)
 
-    # 3. Check og:image and twitter:image meta tags
     for meta_prop in ["og:image", "twitter:image"]:
         m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
         if m_tag and m_tag.get("content"):
@@ -140,7 +148,6 @@ def extract_best_poster_url(soup, html):
         if not u or "logo" in u.lower() or "default" in u.lower():
             continue
         return u
-
     return None
 
 
