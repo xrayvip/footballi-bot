@@ -1,8 +1,7 @@
 # generate_thumbnails_batch.py
+# 100% Free - Zero Cost Edition (No API billing)
 import os
 import re
-import json
-import base64
 import requests
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -10,7 +9,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from PIL import Image, ImageDraw, ImageFont
 
-GATEWAY_BASE = "https://ai.najafivip.ir/v1"
 TOKEN_FILE = "token.json"
 
 
@@ -32,6 +30,7 @@ def get_youtube_service():
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, [yt_scope])
     elif os.environ.get("YOUTUBE_TOKEN"):
+        import json
         token_data = json.loads(os.environ["YOUTUBE_TOKEN"])
         creds = Credentials.from_authorized_user_info(token_data, [yt_scope])
 
@@ -46,6 +45,7 @@ def get_youtube_service():
 def add_official_footballi_watermark(image_path):
     try:
         img = Image.open(image_path).convert("RGBA")
+        img = img.resize((1280, 720), Image.Resampling.LANCZOS)
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
@@ -62,125 +62,44 @@ def add_official_footballi_watermark(image_path):
 
         final_img = Image.alpha_composite(img, overlay).convert("RGB")
         final_img.save(image_path, "JPEG", quality=95)
-        print("[WATERMARK] Official Footballi brand watermark embedded.")
+        print("[WATERMARK] Official Footballi brand watermark embedded cleanly.")
     except Exception as e:
         print(f"[WARN] Watermark note: {e}")
 
 
-def generate_pure_english_prompt(title, desc, arvan_key):
-    """Guarantees a clean, 100% English prompt tailored to the match or interview"""
-    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    
-    # Simple, bulletproof system prompt
-    system_instruction = "You are an AI Image Prompt Generator. Translate the football match or sports event into an ultra-realistic English prompt for an image generator. Output English text ONLY."
-    user_query = f"Create a 16:9 football YouTube thumbnail prompt for this match/video: Title='{title}'. Mention team kits accurately (Esteghlal Khuzestan vs Esteghlal: blue vs blue/white duel on grass), intense action, stadium floodlights at night, 8k sports photography, strictly no text."
+def find_original_footballi_poster(title):
+    """Finds high-resolution official match poster directly from Footballi servers (Cost: $0.00)"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"}
+    search_urls = [
+        "https://footballi.net/news/video",
+        "https://footballi.net/video",
+        "https://footballi.net/competition/14"
+    ]
+    keywords = [w for w in title.replace("خلاصه", "").replace("بازی", "").split() if len(w) > 2]
 
-    models = ["GPT-4o-mini", "Gemini-3.1-Flash-Lite-Preview", "Claude-Sonnet-4.6"]
-    for m in models:
+    for surl in search_urls:
         try:
-            payload = {
-                "model": m,
-                "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_query}
-                ],
-                "temperature": 0.2
-            }
-            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=30)
+            r = requests.get(surl, headers=headers, timeout=12)
             if r.status_code == 200:
-                out = r.json()["choices"][0]["message"]["content"].strip()
-                # Ensure no Persian characters exist in the output prompt
-                if not re.search(r"[\u0600-\u06FF]", out):
-                    print(f"[AI-PROMPT] Prompt successfully translated by {m}.")
-                    return out
-        except Exception as e:
-            print(f"[INFO] Prompt model {m}: {e}")
-
-    # Solid pure English fallback if API fails
-    return "Epic soccer match collision on grass between Esteghlal players in blue kit vs opponent in white kit, ball in mid-air, intense facial expressions, packed stadium floodlights at night, dramatic cinematic sports photography, 16:9 widescreen, strictly no text."
-
-
-def create_ai_image(image_prompt, output_jpg, arvan_key):
-    headers = {"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"}
-    models = ["Gemini-3-Pro-Image-Preview", "Gemini-3.1-Flash-Image-Preview"]
-
-    for m in models:
-        # Route A: /chat/completions
-        try:
-            print(f"[AI-IMAGE] Requesting image via chat endpoint ({m})...")
-            payload = {
-                "model": m,
-                "messages": [
-                    {"role": "user", "content": f"Create this photorealistic 16:9 image: {image_prompt}"}
-                ]
-            }
-            r = requests.post(f"{GATEWAY_BASE}/chat/completions", headers=headers, json=payload, timeout=85)
-            if r.status_code == 200:
-                data = r.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-                b64_match = re.search(r"data:image/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)", str(content))
-                if b64_match:
-                    with open(output_jpg, "wb") as f:
-                        f.write(base64.b64decode(b64_match.group(1)))
-                    add_official_footballi_watermark(output_jpg)
-                    return True
-
-                url_match = re.search(r"https?://[^\s\)\"'>]+\.(?:png|jpg|jpeg|webp)", str(content), re.IGNORECASE)
-                if not url_match:
-                    url_match = re.search(r"!\[.*?\]\((https?://[^\s\)]+)\)", str(content))
-                    img_u = url_match.group(1) if url_match else None
-                else:
-                    img_u = url_match.group(0)
-
-                if img_u:
-                    dl = requests.get(img_u, timeout=30)
-                    if dl.status_code == 200 and len(dl.content) > 10_000:
-                        with open(output_jpg, "wb") as f:
-                            f.write(dl.content)
-                        add_official_footballi_watermark(output_jpg)
-                        return True
-            else:
-                print(f"[DEBUG] Chat response HTTP {r.status_code}: {r.text[:140]}")
-        except Exception as e:
-            print(f"[DEBUG] Chat error: {e}")
-
-        # Route B: /images/generations
-        try:
-            print(f"[AI-IMAGE] Requesting image via images endpoint ({m})...")
-            payload = {"model": m, "prompt": image_prompt, "n": 1, "size": "1024x1024"}
-            r = requests.post(f"{GATEWAY_BASE}/images/generations", headers=headers, json=payload, timeout=60)
-            if r.status_code == 200:
-                data_list = r.json().get("data", [])
-                if data_list:
-                    b64 = data_list[0].get("b64_json")
-                    u = data_list[0].get("url")
-                    if b64:
-                        with open(output_jpg, "wb") as f:
-                            f.write(base64.b64decode(b64))
-                        add_official_footballi_watermark(output_jpg)
-                        return True
-                    elif u:
-                        dl = requests.get(u, timeout=30)
-                        if dl.status_code == 200:
-                            with open(output_jpg, "wb") as f:
-                                f.write(dl.content)
-                            add_official_footballi_watermark(output_jpg)
-                            return True
-            else:
-                print(f"[DEBUG] Images response HTTP {r.status_code}: {r.text[:140]}")
-        except Exception as e:
-            print(f"[DEBUG] Images error: {e}")
-
-    return False
+                links = re.findall(r'href=["\'](/video/[^"\']+)["\']', r.text)
+                for l in links[:20]:
+                    page_u = f"https://footballi.net{l}"
+                    rp = requests.get(page_u, headers=headers, timeout=10)
+                    if rp.status_code == 200:
+                        p_html = rp.text
+                        if any(k in p_html for k in keywords[:2]):
+                            # Look for high-res cdn.oddrun.ir / vod.cdnboks.com posters
+                            posters = re.findall(r'<meta[^>]+(?:og:image|twitter:image)[^>]+content=["\']([^"\']+)["\']', p_html)
+                            if not posters:
+                                posters = re.findall(r'poster=["\']([^"\']+)["\']', p_html)
+                            if posters:
+                                return posters[0]
+        except Exception:
+            pass
+    return None
 
 
 def main():
-    arvan_key = os.environ.get("ARVAN_API_KEY", "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
-    if not arvan_key:
-        print("❌ ARVAN_API_KEY is not set!")
-        return
-
     raw_target = os.environ.get("TARGET_VIDEO", "").strip()
     vid_id = extract_video_id(raw_target)
     if not vid_id:
@@ -198,27 +117,37 @@ def main():
 
     sn = items[0]["snippet"]
     title = sn.get("title", "")
-    desc = sn.get("description", "")
     print(f"🎯 Target Title: {title}")
 
-    # 1. Pure English Prompt Translation
-    print("🧠 Crafting 100% English Photography Prompt...")
-    ai_prompt = generate_pure_english_prompt(title, desc, arvan_key)
-    print(f"🎬 Directed English Prompt:\n{ai_prompt}\n")
+    # 1. Fetch Official High-Res Poster ($0 Cost)
+    print("🖼️ Fetching official original match poster from Footballi CDN...")
+    poster_url = find_original_footballi_poster(title)
 
-    # 2. Render Image & Apply Watermark
     tmp_img = f"thumb_{vid_id}.jpg"
-    if create_ai_image(ai_prompt, tmp_img, arvan_key):
-        try:
-            youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(tmp_img)).execute()
-            print(f"✅ Successfully updated thumbnail for video: https://youtu.be/{vid_id}")
-        except Exception as e:
-            print(f"❌ YouTube API error: {e}")
-        finally:
-            if os.path.exists(tmp_img):
-                os.remove(tmp_img)
-    else:
-        print(f"❌ Thumbnail generation failed for {vid_id}.")
+    success = False
+
+    if poster_url:
+        print(f"✅ Found official poster: {poster_url}")
+        r_img = requests.get(poster_url, timeout=25)
+        if r_img.status_code == 200 and len(r_img.content) > 5_000:
+            with open(tmp_img, "wb") as f:
+                f.write(r_img.content)
+            add_official_footballi_watermark(tmp_img)
+            success = True
+
+    if not success:
+        # Fallback to direct download if poster url wasn't matched
+        print("⚠️ Direct poster match not found, keeping original clean thumbnail.")
+        return
+
+    try:
+        youtube.thumbnails().set(videoId=vid_id, media_body=MediaFileUpload(tmp_img)).execute()
+        print(f"🎉 Successfully updated official HD thumbnail for: https://youtu.be/{vid_id}")
+    except Exception as e:
+        print(f"❌ YouTube API error: {e}")
+    finally:
+        if os.path.exists(tmp_img):
+            os.remove(tmp_img)
 
 
 if __name__ == "__main__":
