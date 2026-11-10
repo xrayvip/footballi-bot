@@ -1,0 +1,101 @@
+name: Mobile YouTube Token Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_code_or_url:
+        description: 'در مرحله اول خالی بگذارید؛ در مرحله دوم لینک localhost را اینجا پیست کنید'
+        required: false
+        default: ''
+
+jobs:
+  generate_token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Google Auth
+        run: pip install -q google-auth-oauthlib requests
+
+      - name: Step 1 or Step 2 Token Handler
+        env:
+          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
+          INPUT_VAL: ${{ inputs.auth_code_or_url }}
+        run: |
+          python3 -c '
+          import os, json, re, urllib.parse
+          from urllib.parse import urlparse, parse_qs
+          import requests
+
+          secret_raw = os.environ.get("CLIENT_SECRETS", "").strip()
+          data = json.loads(secret_raw)
+          cfg = data.get("installed") or data.get("web")
+          client_id = cfg["client_id"]
+          client_secret = cfg["client_secret"]
+          redirect_uri = "http://localhost:8080/"
+          scope = "https://www.googleapis.com/auth/youtube"
+
+          user_in = os.environ.get("INPUT_VAL", "").strip()
+
+          if not user_in:
+              params = {
+                  "client_id": client_id,
+                  "redirect_uri": redirect_uri,
+                  "response_type": "code",
+                  "scope": scope,
+                  "access_type": "offline",
+                  "prompt": "consent"
+              }
+              auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+              print("==========================================================")
+              print("📱 گام ۱: لینک زیر را کپی کرده و در مرورگر گوشی باز کنید:")
+              print("")
+              print(auth_url)
+              print("")
+              print("بعد از زدن Allow، مرورگر به یک صفحه سفید (localhost:8080) می‌رود که باز نمی‌شود.")
+              print("کل آدرس بالای مرورگر (که تویش code= دارد) را کپی کنید و دوباره Run workflow را بزنید و در کادر پیست کنید!")
+              print("==========================================================")
+          else:
+              code = user_in
+              if "code=" in user_in:
+                  parsed = urlparse(user_in)
+                  qs = parse_qs(parsed.query)
+                  if "code" in qs:
+                      code = qs["code"][0]
+                  else:
+                      m = re.search(r"code=([^&]+)", user_in)
+                      if m:
+                          code = urllib.parse.unquote(m.group(1))
+
+              token_url = "https://oauth2.googleapis.com/token"
+              payload = {
+                  "code": code,
+                  "client_id": client_id,
+                  "client_secret": client_secret,
+                  "redirect_uri": redirect_uri,
+                  "grant_type": "authorization_code"
+              }
+              r = requests.post(token_url, data=payload)
+              if r.status_code != 200:
+                  print("❌ خطا در دریافت توکن:", r.text)
+                  exit(1)
+
+              t_data = r.json()
+              final_token = {
+                  "token": t_data.get("access_token"),
+                  "refresh_token": t_data.get("refresh_token"),
+                  "token_uri": "https://oauth2.googleapis.com/token",
+                  "client_id": client_id,
+                  "client_secret": client_secret,
+                  "scopes": [scope]
+              }
+              print("==========================================================")
+              print("✅ توکن دائمی جدید ساخته شد! خط زیر را کامل کپی کنید و در سکرت YOUTUBE_TOKEN قرار دهید:")
+              print("")
+              print(json.dumps(final_token))
+              print("")
+              print("==========================================================")
+          '
