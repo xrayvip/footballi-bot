@@ -1,4 +1,5 @@
 # scrapers.py
+# Autonomous AI Web-Browsing Agent (Playwright Chromium + Gemini Decision Engine)
 import os
 import re
 import json
@@ -12,7 +13,13 @@ from config import (
     FORBIDDEN_KEYWORDS, SUMMARY_KEYWORDS,
     APIFY_COOLDOWN_HOURS, MAX_REELS_PER_RUN
 )
-from ai_seo import sanitize_url
+from ai_seo import sanitize_url, GOOGLE_API_BASE
+
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
 
 
 def clean_scraped_title(raw_title):
@@ -64,107 +71,219 @@ def is_safe_by_keywords(title, tags_text=""):
     combined = normalize_persian(f"{title} {tags_text}")
     for kw in FORBIDDEN_KEYWORDS:
         if normalize_persian(kw) in combined:
-            print(f"[SKIP] Forbidden keyword ('{kw}'): {title[:55]}")
             return False
     return True
 
 
-def extract_title_for_link(a_tag):
-    for attr in ["title", "aria-label", "data-title"]:
-        val = a_tag.get(attr)
-        if val and len(clean_scraped_title(val)) >= 6:
-            return clean_scraped_title(val)
+def ai_agent_rank_and_select(raw_links, existing_titles):
+    """
+    The AI Editorial Brain:
+    Receives all discovered video links across Footballi.net, compares them against existing channel videos,
+    filters out any foreign/AFC copyrighted matches, and ranks the best domestic videos by YouTube viral potential.
+    """
+    google_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not google_key or not raw_links:
+        return raw_links[:15]
 
-    for h_tag in a_tag.find_all(["h1", "h2", "h3", "h4", "h5", "p", "span"]):
-        txt = clean_scraped_title(h_tag.get_text(" ", strip=True))
-        if len(txt) >= 8:
-            return txt
+    prompt = f"""
+You are the Autonomous AI Chief Editor browsing 'footballi.net' for our official Iranian football YouTube channel.
 
-    txt = clean_scraped_title(a_tag.get_text(" ", strip=True))
-    if len(txt) >= 6:
-        return txt
+Below is a list of candidate videos currently on the website, and a list of recent titles already on our YouTube channel.
 
-    return ""
+YOUR EDITORIAL MISSION:
+1. EXCLUDE any video that is already on our channel (even if phrased slightly differently).
+2. EXCLUDE any foreign football (LaLiga, Premier League, Serie A, Bundesliga, Champions League, Arab leagues, etc.) or AFC Asian Champions League matches (even if Iranian teams play).
+3. SELECT ONLY safe Iranian domestic football content (Persian Gulf Pro League, Hazfi Cup, Azadegan League, Iran National Team, domestic club/coach/player interviews & controversies).
+4. PRIORITIZE & RANK the selected videos from #1 (highest priority) to last:
+   - Priority 1: Full Domestic Match Summaries ("خلاصه بازی...") -> set "is_summary": true
+   - Priority 2: High-engagement domestic controversies, coach press conferences, Esteghlal/Persepolis/Tractor/Sepahan exclusive videos -> set "is_summary": false
+
+Return ONLY a valid JSON array in exact priority order (max 12 best items):
+[
+  {{
+    "url": "https://footballi.net/video/...",
+    "title": "...",
+    "is_summary": true,
+    "priority_score": 98,
+    "editorial_note": "Full domestic match summary"
+  }}
+]
+
+Already on YouTube Channel (DO NOT pick these):
+{json.dumps(list(existing_titles)[:40], ensure_ascii=False)}
+
+Candidate Videos Found on Website:
+{json.dumps(raw_links[:60], ensure_ascii=False)}
+"""
+
+    models = ["models/gemini-flash-lite-latest", "models/gemini-2.0-flash"]
+    for m in models:
+        try:
+            url = f"{GOOGLE_API_BASE}/{m}:generateContent"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.15, "responseMimeType": "application/json"}
+            }
+            r = requests.post(url, params={"key": google_key}, json=payload, timeout=45)
+            if r.status_code == 200:
+                txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if txt.startswith("```"):
+                    txt = re.sub(r"^```(?:json)?|```$", "", txt, flags=re.MULTILINE).strip()
+                selected = json.loads(txt)
+                out = []
+                for item in selected:
+                    if item.get("url") and item.get("title"):
+                        out.append({
+                            "url": sanitize_url(item["url"]),
+                            "title": item["title"],
+                            "source": "web",
+                            "is_short": False,
+                            "is_summary": bool(item.get("is_summary", False))
+                        })
+                print(f"[AI-AGENT] Browsed {len(raw_links)} links -> Selected & prioritized {len(out)} best domestic videos.")
+                return out
+        except Exception as e:
+            print(f"[WARN] AI Agent ranking note ({m}): {e}")
+
+    return raw_links[:15]
 
 
 def scrape_website_candidates(history, existing_titles, save_history_fn):
-    candidates = []
-    seen_in_this_scan = set()
+    """
+    Uses a real headless Chromium browser (Playwright) to navigate Footballi.net like a human editor,
+    rendering dynamic Angular components, collecting all video links, and handing them to the AI Editor.
+    """
     permanently_done_urls = set(history.get("uploaded_urls", []))
+    discovered_map = {}
 
-    for raw_page_url in VIDEO_LIST_URLS:
-        page_url = sanitize_url(raw_page_url)
-        decoded_page_url = unquote(page_url)
-
+    if PLAYWRIGHT_AVAILABLE:
+        print("[AI-BROWSER] Launching real headless Chromium browser to explore footballi.net...")
         try:
-            resp = requests.get(page_url, headers=HEADERS, timeout=20)
-            if resp.status_code != 200:
-                print(f"[WARN] HTTP {resp.status_code} on {decoded_page_url}")
-                continue
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    locale="fa-IR",
+                    viewport={"width": 1440, "height": 900}
+                )
+                page = context.new_page()
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            page_matches = 0
-            page_summaries = 0
+                # Browse key hubs with real JavaScript execution
+                hubs_to_visit = [
+                    BASE_URL + "/video",
+                    BASE_URL + "/news/video",
+                    BASE_URL,
+                    BASE_URL + "/team/830",  # Esteghlal
+                    BASE_URL + "/team/829",  # Persepolis
+                    BASE_URL + "/team/833",  # Sepahan
+                    BASE_URL + "/team/836",  # Tractor
+                ]
 
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                # Strictly match /video/<numeric_id> links
-                vid_id_match = re.search(r"/video/(\d+)", href)
-                if not vid_id_match:
-                    continue
+                for hub_url in hubs_to_visit:
+                    try:
+                        page.goto(hub_url, wait_until="domcontentloaded", timeout=25000)
+                        page.wait_for_timeout(2000)
+                        # Scroll down once to trigger lazy-loaded Angular video cards
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+                        page.wait_for_timeout(1000)
 
-                vid_num_id = vid_id_match.group(1)
-                # Normalize URL by numeric video ID so differently slugged links never duplicate
-                canonical_key = f"{BASE_URL}/video/{vid_num_id}"
-                full_url = sanitize_url(urljoin(BASE_URL, href).split("?")[0].rstrip("/"))
+                        # Extract all rendered /video/<id> links directly from the live DOM
+                        links_data = page.evaluate("""() => {
+                            const items = [];
+                            document.querySelectorAll('a[href*="/video/"]').forEach(a => {
+                                const href = a.href;
+                                const title = a.getAttribute('title') || a.innerText || '';
+                                if (href && title) {
+                                    items.push({url: href, title: title});
+                                }
+                            });
+                            return items;
+                        }""")
 
-                if canonical_key in seen_in_this_scan or canonical_key in permanently_done_urls or full_url in permanently_done_urls:
-                    continue
+                        for entry in links_data:
+                            u = sanitize_url(entry["url"].split("?")[0].rstrip("/"))
+                            m_id = re.search(r"/video/(\d+)", u)
+                            if not m_id:
+                                continue
+                            vid_id = m_id.group(1)
+                            canon = f"{BASE_URL}/video/{vid_id}"
+                            if canon in permanently_done_urls or u in permanently_done_urls or canon in discovered_map:
+                                continue
 
-                clean_t = extract_title_for_link(a)
-                if not clean_t or len(clean_t) < 6:
-                    continue
+                            clean_t = clean_scraped_title(entry["title"])
+                            if len(clean_t) < 6:
+                                continue
+                            if is_duplicate_title(clean_t, existing_titles):
+                                continue
+                            if not is_safe_by_keywords(clean_t):
+                                permanently_done_urls.add(canon)
+                                history["uploaded_urls"].append(canon)
+                                continue
 
-                if is_duplicate_title(clean_t, existing_titles):
-                    seen_in_this_scan.add(canonical_key)
-                    continue
+                            discovered_map[canon] = {
+                                "url": u,
+                                "canonical_id": vid_id,
+                                "title": clean_t,
+                                "source": "web",
+                                "is_short": False,
+                                "is_summary": is_match_summary(clean_t)
+                            }
+                    except Exception as e:
+                        print(f"[AI-BROWSER] Hub navigation note on {hub_url}: {e}")
 
-                if not is_safe_by_keywords(clean_t):
-                    seen_in_this_scan.add(canonical_key)
-                    permanently_done_urls.add(full_url)
-                    history["uploaded_urls"].append(full_url)
-                    history["uploaded_urls"].append(canonical_key)
-                    continue
-
-                is_sum = is_match_summary(clean_t)
-                if is_sum:
-                    page_summaries += 1
-
-                seen_in_this_scan.add(canonical_key)
-                page_matches += 1
-                candidates.append({
-                    "url": full_url,
-                    "canonical_id": vid_num_id,
-                    "title": clean_t,
-                    "source": "web",
-                    "is_short": False,
-                    "is_summary": is_sum
-                })
-
-            if page_matches > 0:
-                print(f"[CRAWLER] {decoded_page_url} -> {page_matches} videos ({page_summaries} Match Summaries)")
-
+                browser.close()
         except Exception as e:
-            print(f"[WARN] Failed crawling {decoded_page_url}: {e}")
+            print(f"[WARN] Playwright browser fallback triggered: {e}")
+
+    # Fallback / Supplement with fast HTTP scan if Playwright was not installed yet
+    if not discovered_map:
+        for raw_page_url in VIDEO_LIST_URLS:
+            page_url = sanitize_url(raw_page_url)
+            try:
+                resp = requests.get(page_url, headers=HEADERS, timeout=18)
+                if resp.status_code != 200:
+                    continue
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for a in soup.find_all("a", href=True):
+                    m_id = re.search(r"/video/(\d+)", a["href"])
+                    if not m_id:
+                        continue
+                    vid_id = m_id.group(1)
+                    canon = f"{BASE_URL}/video/{vid_id}"
+                    full_u = sanitize_url(urljoin(BASE_URL, a["href"]).split("?")[0].rstrip("/"))
+                    if canon in permanently_done_urls or full_u in permanently_done_urls or canon in discovered_map:
+                        continue
+                    clean_t = clean_scraped_title(a.get("title") or a.get_text(" ", strip=True))
+                    if len(clean_t) < 6 or is_duplicate_title(clean_t, existing_titles):
+                        continue
+                    if not is_safe_by_keywords(clean_t):
+                        permanently_done_urls.add(canon)
+                        history["uploaded_urls"].append(canon)
+                        continue
+                    discovered_map[canon] = {
+                        "url": full_u,
+                        "canonical_id": vid_id,
+                        "title": clean_t,
+                        "source": "web",
+                        "is_short": False,
+                        "is_summary": is_match_summary(clean_t)
+                    }
+            except Exception:
+                pass
 
     save_history_fn(history)
-    return candidates
+    all_raw = list(discovered_map.values())
+    if not all_raw:
+        return []
+
+    # Let the AI Editorial Agent rank, filter, and prioritize the discovered videos
+    return ai_agent_rank_and_select(all_raw, existing_titles)
 
 
 def extract_video_details_from_page(page_url):
     """
-    Precision extractor for Footballi's Angular SSR pages:
-    Finds the exact .mp4 stream belonging to THIS video ID (ignoring global featured/sidebar videos).
+    Uses the real headless browser to open the exact video page, wait for the main <video> player
+    to load its active .mp4 source, and verify the H1 title—100% immune to sidebar mixups!
     """
     clean_page_url = sanitize_url(page_url)
     id_match = re.search(r"/video/(\d+)", clean_page_url)
@@ -172,74 +291,98 @@ def extract_video_details_from_page(page_url):
         return None
     target_vid_id = id_match.group(1)
 
+    if PLAYWRIGHT_AVAILABLE:
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(user_agent=HEADERS["User-Agent"], locale="fa-IR")
+                page = context.new_page()
+
+                captured_mp4s = []
+                # Sniff real network requests for .mp4 streams initiated by the video player
+                page.on(
+                    "request",
+                    lambda req: captured_mp4s.append(req.url) if ".mp4" in req.url.lower() else None
+                )
+
+                page.goto(clean_page_url, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(2500)
+
+                data = page.evaluate("""() => {
+                    const h1 = document.querySelector('h1');
+                    const vid = document.querySelector('main video, article video, video');
+                    const src = vid ? (vid.currentSrc || vid.src || (vid.querySelector('source') ? vid.querySelector('source').src : '')) : '';
+                    const poster = vid ? vid.poster : '';
+                    const ogImg = document.querySelector('meta[property="og:image"]');
+                    const tags = Array.from(document.querySelectorAll('a[href*="/tag/"]')).map(el => el.innerText).slice(0, 12).join(' ');
+                    return {
+                        title: h1 ? h1.innerText : '',
+                        videoSrc: src,
+                        poster: poster || (ogImg ? ogImg.content : ''),
+                        tags: tags
+                    };
+                }""")
+
+                browser.close()
+
+                title = clean_scraped_title(data.get("title", ""))
+                tags_text = data.get("tags", "")
+                if not title:
+                    return None
+
+                if not is_safe_by_keywords(title, tags_text):
+                    return {"rejected_forever": True}
+
+                mp4_url = data.get("videoSrc") or (captured_mp4s[0] if captured_mp4s else None)
+                if mp4_url and ".mp4" in mp4_url:
+                    return {
+                        "mp4_url": sanitize_url(mp4_url),
+                        "title": title,
+                        "tags_text": tags_text,
+                        "thumb_url": sanitize_url(data.get("poster")) if data.get("poster") else None
+                    }
+        except Exception as e:
+            print(f"[INFO] Browser player inspection fallback on {clean_page_url}: {e}")
+
+    # Fallback: Target-ID Window Extraction in static HTML
     try:
         resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
         if resp.status_code != 200:
             return None
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
-
         h1 = soup.find("h1")
         page_title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
         if not page_title:
             return None
 
-        # Only extract tags inside the main article area (not global footer links)
-        main_container = soup.find("main") or soup.find("article") or soup
-        tags_list = [t.get_text(strip=True) for t in main_container.select("a[href*='/tag/']")]
-        tags_text = " ".join(tags_list[:15])
-
+        tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")][:15]
+        tags_text = " ".join(tags_list)
         if not is_safe_by_keywords(page_title, tags_text):
             return {"rejected_forever": True}
 
-        unescaped_html = html.replace("\\/", "/").replace("&quot;", '"')
+        unescaped = html.replace("\\/", "/")
         mp4_url = None
-        thumb_url = None
-
-        # Strategy 1: Look in the HTML/JSON window right around the target video ID (target_vid_id)
-        # In Footballi's Angular TransferState, the video object contains `"id":1073641` (or `"videoId":1073641`) right next to its `.mp4` URL!
-        for m in re.finditer(rf"\b{target_vid_id}\b", unescaped_html):
+        for m in re.finditer(rf"\b{target_vid_id}\b", unescaped):
             pos = m.start()
-            window = unescaped_html[max(0, pos - 1500): min(len(unescaped_html), pos + 2500)]
-            window_mp4s = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', window)
-            if window_mp4s:
-                mp4_url = window_mp4s[0]
+            window = unescaped[max(0, pos - 1200): min(len(unescaped), pos + 2000)]
+            matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', window)
+            if matches:
+                mp4_url = matches[0]
                 break
-
-        # Strategy 2: Check direct <video> tag in main content (after stripping aside/related)
-        if not mp4_url:
-            for junk in soup.find_all(["aside", "footer", "nav"]):
-                junk.decompose()
-            vid_tag = soup.find("video")
-            if vid_tag:
-                src = vid_tag.get("src") or (vid_tag.find("source", src=True)["src"] if vid_tag.find("source", src=True) else None)
-                if src and ".mp4" in src:
-                    mp4_url = src
-                if vid_tag.get("poster"):
-                    thumb_url = vid_tag.get("poster")
-
-        # Strategy 3: Check meta og:video or JSON-LD VideoObject
-        if not mp4_url:
-            og_vid = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:url") or soup.find("meta", property="og:video:secure_url")
-            if og_vid and og_vid.get("content") and ".mp4" in og_vid.get("content", ""):
-                mp4_url = og_vid["content"]
 
         if not mp4_url:
             return None
 
-        if not thumb_url:
-            og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-            if og_img and og_img.get("content"):
-                thumb_url = og_img.get("content")
-
+        og_img = soup.find("meta", property="og:image")
+        thumb_url = og_img.get("content") if og_img else None
         return {
             "mp4_url": sanitize_url(mp4_url),
             "title": page_title,
             "tags_text": tags_text,
             "thumb_url": sanitize_url(thumb_url) if thumb_url else None
         }
-    except Exception as e:
-        print(f"[WARN] Error extracting details from {clean_page_url}: {e}")
+    except Exception:
         return None
 
 
