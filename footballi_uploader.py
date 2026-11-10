@@ -35,17 +35,25 @@ def load_history():
                         "uploaded_urls": data,
                         "uploaded_mp4s": [],
                         "uploaded_titles": [],
+                        "pending_queue": [],
                         "last_apify_run": 0
                     }
                 if isinstance(data, dict):
                     data.setdefault("uploaded_urls", [])
                     data.setdefault("uploaded_mp4s", [])
                     data.setdefault("uploaded_titles", [])
+                    data.setdefault("pending_queue", [])
                     data.setdefault("last_apify_run", 0)
                     return data
         except Exception as e:
             print(f"[WARN] Could not read history file: {e}")
-    return {"uploaded_urls": [], "uploaded_mp4s": [], "uploaded_titles": [], "last_apify_run": 0}
+    return {
+        "uploaded_urls": [],
+        "uploaded_mp4s": [],
+        "uploaded_titles": [],
+        "pending_queue": [],
+        "last_apify_run": 0
+    }
 
 
 def save_history(history):
@@ -53,6 +61,15 @@ def save_history(history):
         history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-2000:]
         history["uploaded_mp4s"] = list(dict.fromkeys(history.get("uploaded_mp4s", [])))[-2000:]
         history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1500:]
+        # Keep up to 50 items in pending_queue, sorted with Match Summaries first
+        pq = history.get("pending_queue", [])
+        unique_pq = {}
+        for item in pq:
+            if isinstance(item, dict) and item.get("mp4_url"):
+                unique_pq[item["mp4_url"]] = item
+        sorted_pq = sorted(unique_pq.values(), key=lambda x: (0 if x.get("is_summary") else 1))
+        history["pending_queue"] = sorted_pq[:50]
+
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -228,51 +245,37 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Strict Player Verification & Zero-Dup Edition)...")
+    print("[START] Footballi Bot starting (Persistent Queue & Multi-Tier AI Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
     existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
-
-    # Reset stale URL cache once (unblocked_v3) while keeping live YouTube channel titles as source of truth
-    if not history.get("unblocked_v3"):
-        history["uploaded_urls"] = []
-        history["uploaded_titles"] = list(existing_titles)
-        history["unblocked_v3"] = True
-        save_history(history)
-        print("[CACHE-RESET] Cleared stale URL cache (v3); using live YouTube channel titles for deduplication.")
-
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
 
     seen_mp4s = set(history.get("uploaded_mp4s", []))
 
-    if uploads_today >= MAX_DAILY_UPLOADS:
-        print("[STOP] Daily quota reached. Waiting until 11:30 AM tomorrow.")
-        return
+    # 1. Load any previously queued videos that were waiting for YouTube quota to open
+    pending_queue = [
+        q for q in history.get("pending_queue", [])
+        if q.get("mp4_url") not in seen_mp4s and not is_duplicate_title(q.get("title", ""), existing_titles)
+    ]
+    if pending_queue:
+        print(f"[QUEUE] Loaded {len(pending_queue)} saved videos from Pending Queue waiting for upload!")
 
+    # 2. Discover new videos from website and Instagram
     web_candidates = scrape_website_candidates(history, existing_titles, save_history)
     reel_candidates = fetch_instagram_reels(history, existing_titles, save_history)
 
     summaries = [c for c in web_candidates if c.get("is_summary")]
     others = [c for c in web_candidates if not c.get("is_summary")]
+    fresh_pool = (summaries + reel_candidates + others)[:20]
 
-    print(f"[DISCOVERY] Found {len(summaries)} Match Summaries and {len(others)} other videos.")
+    # Enrich only newly discovered candidates (queued items already have mp4_url & AI SEO!)
+    newly_enriched = []
+    queued_mp4s = {q.get("mp4_url") for q in pending_queue}
 
-    non_summary_cap = MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES
-    if uploads_today >= non_summary_cap:
-        print("[QUOTA] Reserved summary zone active! Processing Match Summaries only.")
-        pool = summaries[:15]
-    else:
-        pool = (summaries + reel_candidates + others)[:25]
-
-    if not pool:
-        save_history(history)
-        print("[IDLE] No new candidate videos found.")
-        return
-
-    enriched_pool = []
-    for item in pool:
+    for item in fresh_pool:
         if item["source"] == "web":
             details = extract_video_details_from_page(item["url"])
             if not details:
@@ -282,9 +285,7 @@ def main():
                 continue
 
             mp4_u = details["mp4_url"]
-            if mp4_u in seen_mp4s:
-                print(f"[DUP-MP4] Skipping duplicate video stream: {mp4_u}")
-                history["uploaded_urls"].append(item["url"])
+            if mp4_u in seen_mp4s or mp4_u in queued_mp4s:
                 continue
 
             real_title = details["title"] or item["title"]
@@ -292,7 +293,7 @@ def main():
                 history["uploaded_urls"].append(item["url"])
                 continue
 
-            seen_mp4s.add(mp4_u)
+            queued_mp4s.add(mp4_u)
             item["mp4_url"] = mp4_u
             item["title"] = real_title
             item["tags"] = details["tags_text"]
@@ -300,47 +301,63 @@ def main():
             item["is_summary"] = is_match_summary(real_title)
         else:
             mp4_u = item.get("mp4_url", "")
-            if mp4_u in seen_mp4s:
+            if mp4_u in seen_mp4s or mp4_u in queued_mp4s:
                 continue
-            seen_mp4s.add(mp4_u)
+            queued_mp4s.add(mp4_u)
 
-        enriched_pool.append(item)
+        newly_enriched.append(item)
 
-    if not enriched_pool:
-        save_history(history)
-        print("[IDLE] No valid unique videos remained after page inspection.")
+    # Evaluate newly discovered items with AI and add safe ones to pending_queue
+    if newly_enriched:
+        ai_results = ai_batch_evaluate(newly_enriched)
+        for idx, item in enumerate(newly_enriched):
+            ai_info = ai_results.get(idx)
+            if not ai_info or not ai_info.get("safe", False):
+                reason = ai_info.get("reason", "Rejected") if ai_info else "No AI response"
+                print(f"[AI REJECT] ({reason}): {item['title']}")
+                if ai_info and not ai_info.get("safe", True):
+                    history["uploaded_urls"].append(item["url"])
+                continue
+
+            item["ai_info"] = ai_info
+            pending_queue.append(item)
+
+    # Sort combined queue so Match Summaries are ALWAYS at the top of the queue
+    pending_queue.sort(key=lambda x: (0 if x.get("is_summary") else 1))
+    history["pending_queue"] = pending_queue
+    save_history(history)
+
+    if not pending_queue:
+        print("[IDLE] No videos in queue or website to upload.")
         return
 
-    enriched_pool.sort(key=lambda x: (0 if x.get("is_summary") else 1))
-
-    ai_results = ai_batch_evaluate(enriched_pool)
+    if uploads_today >= MAX_DAILY_UPLOADS:
+        print(f"[QUOTA-WAIT] Daily quota ({uploads_today}/{MAX_DAILY_UPLOADS}) full. {len(pending_queue)} videos safely saved in queue for next reset!")
+        return
 
     playlist_cache = {}
     uploaded_in_this_run = 0
+    remaining_queue = []
+    youtube_limit_hit = False
 
-    for idx, item in enumerate(enriched_pool):
-        if uploaded_in_this_run >= MAX_UPLOADS_PER_RUN or uploads_today >= MAX_DAILY_UPLOADS:
-            break
-
-        ai_info = ai_results.get(idx)
-        is_sum = item.get("is_summary", False)
-
-        if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
-            print(f"[RESERVE] Skipping non-summary '{item['title'][:40]}' (saving slots for Match Summaries).")
+    for idx, item in enumerate(pending_queue):
+        # If YouTube hit limit or run cap reached, keep the rest in remaining_queue for the next run!
+        if youtube_limit_hit or uploaded_in_this_run >= MAX_UPLOADS_PER_RUN or uploads_today >= MAX_DAILY_UPLOADS:
+            remaining_queue.append(item)
             continue
 
-        if not ai_info or not ai_info.get("safe", False):
-            reason = ai_info.get("reason", "AI audit required") if ai_info else "No AI response"
-            print(f"[AI REJECT] ({reason}): {item['title']}")
-            if ai_info and not ai_info.get("safe", True):
-                history["uploaded_urls"].append(item["url"])
-                save_history(history)
+        is_sum = item.get("is_summary", False)
+        if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
+            print(f"[RESERVE] Keeping '{item['title'][:40]}' in queue (saving today's last slots for Match Summaries).")
+            remaining_queue.append(item)
             continue
 
         video_file = f"temp_video_{idx}.mp4"
         thumb_file = f"temp_thumb_{idx}.jpg"
 
         if not download_file(item["mp4_url"], video_file):
+            # If download failed temporarily, keep in queue
+            remaining_queue.append(item)
             continue
 
         width, height, duration = inspect_video_file(video_file)
@@ -349,22 +366,21 @@ def main():
 
         if not is_vertical:
             if is_sum and duration < 90:
-                print(f"[FAST SKIP] Clip too short to be a full Match Summary ({int(duration)}s): {item['title']}")
+                print(f"[FAST SKIP] Clip too short for Match Summary ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 history["uploaded_urls"].append(item["url"])
-                save_history(history)
                 continue
             if not is_sum and duration < 180:
                 print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 history["uploaded_urls"].append(item["url"])
-                save_history(history)
                 continue
 
         if is_vertical:
             enhance_short_to_1080p(video_file, width, height)
 
         original_title = item["title"]
+        ai_info = item.get("ai_info", {})
         seo_title = ai_info.get("seo_title") or original_title
         seo_desc = ai_info.get("seo_description") or original_title
         seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
@@ -404,28 +420,33 @@ def main():
             history["uploaded_mp4s"].append(item["mp4_url"])
             history["uploaded_titles"].append(original_title)
             history["uploaded_titles"].append(seo_title)
-            save_history(history)
 
             existing_titles.add(original_title)
             existing_titles.add(seo_title)
+            seen_mp4s.add(item["mp4_url"])
             uploads_today += 1
             uploaded_in_this_run += 1
 
         except HttpError as e:
             err_str = str(e)
-            print("[ERROR] YouTube API Upload error:", err_str, "- skipping.")
-            if "uploadLimitExceeded" in err_str:
-                print("[STOP] YouTube daily upload limit reached for this account.")
-                break
+            print("[ERROR] YouTube API Upload error:", err_str)
+            if "uploadLimitExceeded" in err_str or "quotaExceeded" in err_str:
+                print("💾 [QUEUE-SAVED] YouTube limit reached! Keeping this video and remaining videos in queue for later!")
+                remaining_queue.append(item)
+                youtube_limit_hit = True
         except Exception as e:
-            print("[ERROR] Unexpected upload error:", str(e), "- skipping.")
+            print("[ERROR] Unexpected upload error:", str(e))
+            remaining_queue.append(item)
         finally:
             if os.path.exists(video_file):
                 os.remove(video_file)
             if os.path.exists(thumb_file):
                 os.remove(thumb_file)
 
-    print(f"[DONE] Run completed. Total videos uploaded in this run: {uploaded_in_this_run}")
+    # Save updated queue and history
+    history["pending_queue"] = remaining_queue
+    save_history(history)
+    print(f"[DONE] Uploaded: {uploaded_in_this_run} | Safely saved in Pending Queue for next runs: {len(remaining_queue)}")
 
 
 if __name__ == "__main__":
