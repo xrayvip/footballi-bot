@@ -2,7 +2,6 @@
 import os
 import re
 import json
-import time
 import requests
 from config import PROTO, FORBIDDEN_KEYWORDS
 
@@ -35,24 +34,44 @@ def sanitize_url(u):
     return s
 
 
+def get_working_google_free_models(google_key):
+    """Dynamically fetches the exact free Gemini models enabled on your Google AI Studio key"""
+    default_models = [
+        "models/gemini-flash-lite-latest",
+        "models/gemini-2.5-flash-lite",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.0-flash"
+    ]
+    try:
+        r = requests.get(f"{GOOGLE_API_BASE}/models", params={"key": google_key}, timeout=12)
+        if r.status_code == 200:
+            avail = [
+                m["name"] for m in r.json().get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+                and "gemini" in m["name"]
+                and not any(x in m["name"] for x in ["tts", "image", "vision", "embedding", "pro"])
+            ]
+            if avail:
+                avail.sort(key=lambda x: (0 if "lite" in x else (1 if "flash" in x else 2)))
+                return avail[:4]
+    except Exception:
+        pass
+    return default_models
+
+
 def call_ai_json(prompt):
     """
-    Universal Multi-Tier AI Caller:
-    Tier 1: Free Google Gemini API (GEMINI_API_KEY) -> $0 Cost.
-    Tier 2: Ultra-Cheap Nano/Lite models on Arvan Cloud (ARVAN_API_KEY) -> Fraction of a cent.
+    Tier 1: Free Google AI Studio (auto-discovers active models on your key).
+    Tier 2: Ultra-Cheap Lite/Nano models on Arvan Cloud (if Google is rate-limited).
     """
     google_key = os.environ.get("GEMINI_API_KEY", "").strip()
     arvan_key = os.environ.get("ARVAN_API_KEY", "").strip()
 
     # ---------------------------------------------------------
-    # TIER 1: Try Free Google Gemini API First ($0 Cost)
+    # TIER 1: Free Google Gemini API ($0 Cost)
     # ---------------------------------------------------------
     if google_key and google_key.startswith("AIza"):
-        google_models = [
-            "models/gemini-2.0-flash",
-            "models/gemini-flash-lite-latest",
-            "models/gemini-2.5-flash"
-        ]
+        google_models = get_working_google_free_models(google_key)
         for gm in google_models:
             try:
                 url = f"{GOOGLE_API_BASE}/{gm}:generateContent"
@@ -60,32 +79,32 @@ def call_ai_json(prompt):
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
                 }
-                resp = requests.post(url, params={"key": google_key}, json=payload, timeout=35)
+                resp = requests.post(url, params={"key": google_key}, json=payload, timeout=40)
                 if resp.status_code == 200:
                     raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    if raw_text.startswith("```"):
-                        raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+                    if "```" in raw_text:
+                        m = re.search(r"\[.*\]", raw_text, flags=re.DOTALL)
+                        if m:
+                            raw_text = m.group(0)
                     parsed = json.loads(raw_text)
-                    print(f"[AI-TIER-1] Success with FREE Google API ({gm}).")
+                    print(f"[AI-TIER-1] Success with FREE Google Gemini ({gm}) at $0 cost.")
                     return parsed
-            except Exception:
-                continue
-        print("[AI-TIER-1] Free Google API unavailable/rate-limited. Failing over to Arvan Ultra-Lite...")
+                else:
+                    print(f"[INFO] Google Free ({gm}) HTTP {resp.status_code}")
+            except Exception as e:
+                print(f"[INFO] Google Free ({gm}) note: {e}")
 
     # ---------------------------------------------------------
-    # TIER 2: Failover to Arvan Ultra-Cheap Nano/Lite Models Only
+    # TIER 2: Failover to Arvan Ultra-Cheap Lite/Nano Models
     # ---------------------------------------------------------
-    # If user put Arvan key inside GEMINI_API_KEY by mistake, detect it automatically
     active_arvan_key = arvan_key if arvan_key else (google_key if not google_key.startswith("AIza") else "")
     if active_arvan_key:
-        # Strictly ordered by lowest token cost in your panel: Nano & Flash-Lite only!
         ultra_cheap_arvan_models = [
-            "Gemini-2.5-Flash-lite",           # #67 - Ultra cheap
-            "Gemini-3.1-Flash-Lite-Preview",   # #89 - Ultra cheap
-            "GPT-4.1-Nano",                    # #62 - Nano pricing
-            "GPT-5-Nano",                      # #69 - Nano pricing
-            "GPT-4o-mini",                     # #76 - Mini pricing
-            "GLM-5.3-Flash"                    # #5  - Flash pricing
+            "Gemini-2.5-Flash-lite",
+            "Gemini-3.1-Flash-Lite-Preview",
+            "GPT-4.1-Nano",
+            "GPT-4o-mini",
+            "GLM-5.3-Flash"
         ]
         headers = {
             "Authorization": f"Bearer {active_arvan_key}",
@@ -111,10 +130,8 @@ def call_ai_json(prompt):
                         if m:
                             raw_text = m.group(0)
                     parsed = json.loads(raw_text)
-                    print(f"[AI-TIER-2] Success with Arvan Ultra-Cheap Budget Model ({am}).")
+                    print(f"[AI-TIER-2] Success with Arvan Ultra-Cheap Model ({am}).")
                     return parsed
-                else:
-                    print(f"[INFO] Arvan {am} returned HTTP {resp.status_code}, trying next cheap model...")
             except Exception as e:
                 print(f"[WARN] Arvan {am} note: {e}")
 
@@ -122,7 +139,6 @@ def call_ai_json(prompt):
 
 
 def build_local_journalistic_seo(candidate):
-    """Tier 3 Emergency Local Auditor if all external networks are down"""
     title = candidate.get("title", "").strip()
     tags = candidate.get("tags", "").strip()
     is_short = candidate.get("is_short", False)
