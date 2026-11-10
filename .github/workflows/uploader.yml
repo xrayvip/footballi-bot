@@ -23,10 +23,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install FFmpeg & Dependencies
+            - name: Install FFmpeg & AI Browser Agent Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
+          pip install requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow playwright
+          playwright install --with-deps chromium
+
 
       - name: Restore Credentials
         env:
