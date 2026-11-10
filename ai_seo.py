@@ -2,10 +2,27 @@
 import os
 import re
 import json
+import time
 import requests
-from config import PROTO
+from config import PROTO, FORBIDDEN_KEYWORDS
 
 GOOGLE_API_BASE = PROTO + "generativelanguage.googleapis" + ".com/v1beta"
+ARVAN_GATEWAY = PROTO + "ai.najafivip" + ".ir/v1"
+
+DOMESTIC_SAFE_INDICATORS = [
+    "استقلال", "پرسپولیس", "سپاهان", "تراکتور", "گل گهر", "گل‌گهر", "ذوب آهن", "ذوب‌آهن",
+    "فولاد", "ملوان", "نساجی", "چادرملو", "مس رفسنجان", "خیبر", "آلومینیوم", "شمس آذر",
+    "هوادار", "پیکان", "صنعت نفت", "سایپا", "فجر", "لیگ برتر ایران", "خلیج فارس", "جام حذفی",
+    "لیگ آزادگان", "تیم ملی", "قلعه نویی", "قلعه‌نویی", "میثاقی", "فوتبال برتر", "داوری",
+    "کمیته انضباطی", "فدراسیون", "درخشان", "تارتار", "رحمتی", "ربیعی", "کارترون", "مطهری",
+    "آسانی", "حردانی", "رامین رضاییان", "بیرانوند", "حسینی", "شمسایی", "فوتسال"
+]
+
+FOREIGN_STARS_BLACKLIST = [
+    "رونالدینیو", "دل پیرو", "دل‌پیرو", "مارادونا", "مسی", "رونالدو", "امباپه", "هالند",
+    "عمر مومنی", "مومنی", "زیدان", "پپ", "گواردیولا", "آنتونی", "وینسیوس", "بلینگهام",
+    "نیمار", "سوارز", "لواندوفسکی", "کلوپ", "مورینیو", "آنچلوتی"
+]
 
 
 def sanitize_url(u):
@@ -18,17 +35,139 @@ def sanitize_url(u):
     return s
 
 
-def ai_batch_evaluate(candidates):
+def call_ai_json(prompt):
     """
-    100% Free SEO & Copyright Evaluation Engine using Google Gemini AI Studio.
-    Zero API cost, zero external dependencies.
+    Universal Multi-Tier AI Caller:
+    Tier 1: Free Google Gemini API (GEMINI_API_KEY) -> $0 Cost.
+    Tier 2: Ultra-Cheap Nano/Lite models on Arvan Cloud (ARVAN_API_KEY) -> Fraction of a cent.
     """
-    if not candidates:
-        return {}
-
     google_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not google_key:
-        print("[WARN] GEMINI_API_KEY is not set.")
+    arvan_key = os.environ.get("ARVAN_API_KEY", "").strip()
+
+    # ---------------------------------------------------------
+    # TIER 1: Try Free Google Gemini API First ($0 Cost)
+    # ---------------------------------------------------------
+    if google_key and google_key.startswith("AIza"):
+        google_models = [
+            "models/gemini-2.0-flash",
+            "models/gemini-flash-lite-latest",
+            "models/gemini-2.5-flash"
+        ]
+        for gm in google_models:
+            try:
+                url = f"{GOOGLE_API_BASE}/{gm}:generateContent"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
+                }
+                resp = requests.post(url, params={"key": google_key}, json=payload, timeout=35)
+                if resp.status_code == 200:
+                    raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if raw_text.startswith("```"):
+                        raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+                    parsed = json.loads(raw_text)
+                    print(f"[AI-TIER-1] Success with FREE Google API ({gm}).")
+                    return parsed
+            except Exception:
+                continue
+        print("[AI-TIER-1] Free Google API unavailable/rate-limited. Failing over to Arvan Ultra-Lite...")
+
+    # ---------------------------------------------------------
+    # TIER 2: Failover to Arvan Ultra-Cheap Nano/Lite Models Only
+    # ---------------------------------------------------------
+    # If user put Arvan key inside GEMINI_API_KEY by mistake, detect it automatically
+    active_arvan_key = arvan_key if arvan_key else (google_key if not google_key.startswith("AIza") else "")
+    if active_arvan_key:
+        # Strictly ordered by lowest token cost in your panel: Nano & Flash-Lite only!
+        ultra_cheap_arvan_models = [
+            "Gemini-2.5-Flash-lite",           # #67 - Ultra cheap
+            "Gemini-3.1-Flash-Lite-Preview",   # #89 - Ultra cheap
+            "GPT-4.1-Nano",                    # #62 - Nano pricing
+            "GPT-5-Nano",                      # #69 - Nano pricing
+            "GPT-4o-mini",                     # #76 - Mini pricing
+            "GLM-5.3-Flash"                    # #5  - Flash pricing
+        ]
+        headers = {
+            "Authorization": f"Bearer {active_arvan_key}",
+            "Content-Type": "application/json"
+        }
+        chat_url = sanitize_url(f"{ARVAN_GATEWAY}/chat/completions")
+
+        for am in ultra_cheap_arvan_models:
+            try:
+                payload = {
+                    "model": am,
+                    "messages": [
+                        {"role": "system", "content": "You are a precise JSON-only sports journalism and SEO engine. Output valid JSON array only."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2
+                }
+                resp = requests.post(chat_url, headers=headers, json=payload, timeout=40)
+                if resp.status_code == 200:
+                    raw_text = resp.json()["choices"][0]["message"]["content"].strip()
+                    if "```" in raw_text:
+                        m = re.search(r"\[.*\]", raw_text, flags=re.DOTALL)
+                        if m:
+                            raw_text = m.group(0)
+                    parsed = json.loads(raw_text)
+                    print(f"[AI-TIER-2] Success with Arvan Ultra-Cheap Budget Model ({am}).")
+                    return parsed
+                else:
+                    print(f"[INFO] Arvan {am} returned HTTP {resp.status_code}, trying next cheap model...")
+            except Exception as e:
+                print(f"[WARN] Arvan {am} note: {e}")
+
+    return None
+
+
+def build_local_journalistic_seo(candidate):
+    """Tier 3 Emergency Local Auditor if all external networks are down"""
+    title = candidate.get("title", "").strip()
+    tags = candidate.get("tags", "").strip()
+    is_short = candidate.get("is_short", False)
+    is_sum = candidate.get("is_summary", False)
+    combined = f"{title} {tags}"
+
+    for bad in FOREIGN_STARS_BLACKLIST + FORBIDDEN_KEYWORDS:
+        if bad in combined:
+            return {"safe": False, "reason": f"Foreign/International keyword ('{bad}')"}
+
+    is_iran_domestic = any(ind in combined for ind in DOMESTIC_SAFE_INDICATORS)
+    if not is_iran_domestic:
+        return {"safe": False, "reason": "Not verified as Iranian domestic football"}
+
+    clean_t = re.sub(r"\s+", " ", title).strip()
+    if is_sum:
+        seo_title = f"{clean_t} | لیگ برتر خلیج فارس" if "لیگ برتر" not in clean_t else clean_t
+        category = "خلاصه بازی‌ها"
+    elif is_short:
+        seo_title = f"{clean_t[:85]} #shorts"
+        category = "ویدیوهای کوتاه (Shorts)"
+    else:
+        seo_title = f"{clean_t[:68]} | فوتبال ایران" if "|" not in clean_t else clean_t[:85]
+        category = "مصاحبه و حواشی فوتبال ایران"
+
+    seo_desc = (
+        f"{clean_t}\n"
+        f"پوشش ویدیویی ویژه از رقابت‌های فوتبال ایران، حواشی، کارشناسی داوری و اظهارات مربیان و بازیکنان در رسانه رسمی فوتبالی.\n\n"
+        f"رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. "
+        f"برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید.\n\n"
+        f"#فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور"
+    )
+
+    return {
+        "safe": True,
+        "reason": "Verified Iranian domestic football",
+        "category": category,
+        "seo_title": seo_title,
+        "seo_description": seo_desc,
+        "seo_tags": ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "خلاصه بازی", "استقلال", "پرسپولیس"]
+    }
+
+
+def ai_batch_evaluate(candidates):
+    if not candidates:
         return {}
 
     items_payload = []
@@ -48,28 +187,23 @@ You are the Chief Editor and YouTube SEO Strategist for the official Iranian spo
 Analyze each candidate video below and perform TWO tasks:
 
 TASK 1 - STRICT COPYRIGHT AUDIT:
-- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League / لیگ آزادگان, Women's League, Futsal, Iran National Team press conferences/interviews, domestic player/coach/manager interviews, refereeing analysis, studio shows, official club media).
+- APPROVE ("safe": true): Iranian domestic football ONLY (Persian Gulf Pro League / لیگ برتر خلیج فارس, Hazfi Cup / جام حذفی, Azadegan League, Women's League, Futsal, Iran National Team, domestic player/coach/manager interviews, refereeing analysis / کارشناسی داوری, studio shows like Football Bartar / میثاقی).
 - REJECT ("safe": false):
-  1. ANY European football match highlights or broadcast footage (Champions League, LaLiga, Premier League, Serie A, Bundesliga, Real Madrid, Barcelona, Man City, etc.).
-  2. ANY AFC Champions League Elite / ACL Two / Asian Champions League match footage or highlights (even if Iranian teams like Esteghlal, Persepolis, Tractor, or Sepahan are playing!).
+  1. ANY European/foreign football match highlights, foreign players/legends (Ronaldinho, Del Piero, Maradona, Omar Momani cartoons, etc.).
+  2. ANY AFC Champions League Elite / ACL Two match footage.
 
 TASK 2 - OFFICIAL NEWS AGENCY SEO TITLE, DESCRIPTION & TAGS (in Persian, for safe videos):
 - "seo_title": Write an authoritative, professional, journalistic, and SEO-optimized Persian title (max 85 characters).
-  * TONE: Official sports news agency (like Sky Sports or Varzesh3). No yellow clickbait, no messy emojis.
   * STRUCTURE:
-    - Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | لیگ برتر ایران" (or جام حذفی / لیگ آزادگان).
-    - Interviews/Press Conferences: "[نام شخص]: [مهم‌ترین جمله خبری به صورت رسمی] | حواشی [نام تیم/رقابت]"
-    - News/Behind-the-scenes: "[موضوع دقیق و رسمی ویدیو] | [نام تیم یا رقابت مربوطه]"
+    - Match Summaries: "خلاصه بازی [تیم میزبان] [نتیجه] [تیم میهمان] | لیگ برتر خلیج فارس"
+    - Interviews/Refereeing/Controversies: "[موضوع دقیق و رسمی ویدیو] | حواشی لیگ برتر ایران"
   * If "is_short" is true, append " #shorts" at the end of the title.
-- "seo_description": Write a clean, professional 3-paragraph journalistic Persian description:
-  * Paragraph 1: 2 formal, informative sentences summarizing the match/event with natural high-search keywords.
-  * Paragraph 2: Official channel footer: "رسانه رسمی فوتبالی؛ پوشش زنده و لحظه‌به‌لحظه مسابقات، خلاصه بازی‌ها، نشست‌های خبری و ویدیوهای اختصاصی فوتبال ایران. برای دنبال کردن آخرین ویدیوها، کانال رسمی فوتبالی را سابسکرایب کنید."
-  * Paragraph 3: 6 to 8 relevant official hashtags (e.g. #فوتبالی #فوتبال_ایران #لیگ_برتر #خلاصه_بازی #استقلال #پرسپولیس #سپاهان #تراکتور).
+- "seo_description": Write a clean, professional 3-paragraph journalistic Persian description with keywords, official subscribe CTA, and 6-8 hashtags.
 - "seo_tags": A list of 10 high-search Persian keywords specific to this video.
 - "category": Choose the exact playlist name:
-  * "خلاصه بازی‌ها" (ONLY for match highlights/summaries/goals)
+  * "خلاصه بازی‌ها" (ONLY for full match summaries)
   * "ویدیوهای کوتاه (Shorts)" (ONLY when is_short is true)
-  * "مصاحبه و حواشی فوتبال ایران" (for interviews, news, press conferences, reactions)
+  * "مصاحبه و حواشی فوتبال ایران" (for interviews, refereeing analysis, news, press conferences)
 
 Return ONLY a valid JSON array with this exact schema:
 [
@@ -77,7 +211,7 @@ Return ONLY a valid JSON array with this exact schema:
     "index": 0,
     "safe": true,
     "reason": "Domestic Iranian football content",
-    "category": "خلاصه بازی‌ها",
+    "category": "مصاحبه و حواشی فوتبال ایران",
     "seo_title": "...",
     "seo_description": "...",
     "seo_tags": ["...", "..."]
@@ -88,51 +222,11 @@ Candidates:
 {json.dumps(items_payload, ensure_ascii=False)}
 """
 
-    models_to_try = [
-        "models/gemini-flash-lite-latest",
-        "models/gemini-3.5-flash-lite",
-        "models/gemini-2.0-flash",
-        "models/gemini-flash-latest"
-    ]
+    parsed = call_ai_json(prompt)
+    if isinstance(parsed, list):
+        result_map = {item["index"]: item for item in parsed if isinstance(item, dict) and "index" in item}
+        if result_map:
+            return result_map
 
-    try:
-        r_m = requests.get(
-            f"{GOOGLE_API_BASE}/models",
-            params={"key": google_key},
-            timeout=15
-        )
-        if r_m.status_code == 200:
-            avail = [
-                m["name"] for m in r_m.json().get("models", [])
-                if "generateContent" in m.get("supportedGenerationMethods", [])
-                and "gemini" in m["name"]
-                and "tts" not in m["name"]
-                and "image" not in m["name"]
-                and "vision" not in m["name"]
-            ]
-            if avail:
-                lite_first = sorted(avail, key=lambda x: (0 if "lite" in x else (1 if "flash" in x else 2)))
-                models_to_try = lite_first[:4]
-    except Exception:
-        pass
-
-    for model_name in models_to_try:
-        try:
-            url = f"{GOOGLE_API_BASE}/{model_name}:generateContent"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
-            }
-            resp = requests.post(url, params={"key": google_key}, json=payload, timeout=50)
-            if resp.status_code == 200:
-                raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
-                parsed = json.loads(raw_text)
-                result_map = {item["index"]: item for item in parsed if "index" in item}
-                print(f"[FREE-SEO] Model ({model_name}) evaluated and SEO-optimized {len(result_map)} videos for $0.")
-                return result_map
-        except Exception as e:
-            print(f"[WARN] Model {model_name} note: {e}")
-
-    return {}
+    print("[AI-TIER-3] Using local journalistic auditor & SEO generator...")
+    return {idx: build_local_journalistic_seo(c) for idx, c in enumerate(candidates)}
