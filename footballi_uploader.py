@@ -13,7 +13,7 @@ from googleapiclient.errors import HttpError
 
 from config import (
     PROTO, HISTORY_FILE, TOKEN_FILE,
-    MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES, MAX_UPLOADS_PER_RUN
+    MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES
 )
 import config
 from ai_seo import ai_batch_evaluate
@@ -24,6 +24,10 @@ from scrapers import (
 from media_utils import (
     inspect_video_file, enhance_short_to_1080p, download_file, prepare_clean_thumbnail
 )
+
+# Force 1 upload per run & breathing room between uploads for maximum YouTube impressions
+MAX_UPLOADS_PER_RUN = 1
+MIN_MINUTES_BETWEEN_UPLOADS = getattr(config, "MIN_MINUTES_BETWEEN_UPLOADS", 45)
 
 VIDEOCAST_KEYWORDS = getattr(
     config,
@@ -55,11 +59,6 @@ def is_poshte_khat(title, tags=""):
 
 
 def item_priority_key(item):
-    """
-    Priority 0: Match Summaries ('خلاصه بازی‌ها')
-    Priority 1: Exclusive Footballi Shows ('ویدیوکست' & 'پشت خط')
-    Priority 2: Shorts & General News
-    """
     t = item.get("title", "")
     tags = item.get("tags", "")
     if item.get("is_summary"):
@@ -125,7 +124,8 @@ def load_history():
                         "uploaded_titles": [],
                         "pending_queue": [],
                         "organized_playlist_vids": [],
-                        "last_apify_run": 0
+                        "last_apify_run": 0,
+                        "last_upload_time": 0
                     }
                 if isinstance(data, dict):
                     data.setdefault("uploaded_urls", [])
@@ -134,6 +134,7 @@ def load_history():
                     data.setdefault("pending_queue", [])
                     data.setdefault("organized_playlist_vids", [])
                     data.setdefault("last_apify_run", 0)
+                    data.setdefault("last_upload_time", 0)
                     return data
         except Exception as e:
             print(f"[WARN] Could not read history file: {e}")
@@ -143,7 +144,8 @@ def load_history():
         "uploaded_titles": [],
         "pending_queue": [],
         "organized_playlist_vids": [],
-        "last_apify_run": 0
+        "last_apify_run": 0,
+        "last_upload_time": 0
     }
 
 
@@ -183,7 +185,6 @@ def get_authenticated_service():
             raise RuntimeError("[ERROR] Valid YouTube token not found!")
 
     return build("youtube", "v3", credentials=creds)
-
 
 
 def get_channel_status_and_24h_count(youtube):
@@ -277,7 +278,6 @@ def get_or_create_playlist(youtube, playlist_title, cache):
 
 
 def get_playlist_video_ids(youtube, playlist_id, members_cache):
-    """Fetches existing video IDs inside a playlist so we never add a video twice"""
     if not playlist_id:
         return set()
     if playlist_id in members_cache:
@@ -333,10 +333,6 @@ def add_video_to_playlist(youtube, video_id, playlist_id, members_cache=None):
 
 
 def organize_existing_channel_shows(youtube, channel_videos, history, playlist_cache):
-    """
-    Retroactively scans already-uploaded videos on the YouTube channel and places any
-    'ویدیوکست' (Videocast), 'پشت خط' (Poshte Khat), or 'خلاصه بازی' into their dedicated playlists!
-    """
     organized_set = set(history.get("organized_playlist_vids", []))
     members_cache = {}
     organized_count = 0
@@ -423,7 +419,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Videocast + Poshte Khat + Auto-Organizer Edition)...")
+    print("[START] Footballi Bot starting (1-Video-Per-Run Paced Drip Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -432,7 +428,6 @@ def main():
         existing_titles.add(t)
 
     playlist_cache = {}
-    # 1. Automatically place any previously uploaded 'ویدیوکست' or 'پشت خط' on the channel into their playlists!
     organize_existing_channel_shows(youtube, channel_videos, history, playlist_cache)
 
     seen_urls = set(history.get("uploaded_urls", []))
@@ -546,11 +541,27 @@ def main():
         print(f"[QUOTA-WAIT] Daily quota ({uploads_today}/{MAX_DAILY_UPLOADS}) full. {len(pending_queue)} unique videos safely held in queue.")
         return
 
+    # Check pacing cooldown (45 mins between regular uploads so each video gets maximum YouTube views!)
+    # Exception: If the top video in queue is a Match Summary ('خلاصه بازی'), upload immediately without waiting!
+    last_upload_ts = float(history.get("last_upload_time", 0))
+    mins_since_last_upload = (time.time() - last_upload_ts) / 60.0
+    top_is_summary = pending_queue[0].get("is_summary", False)
+
+    if not top_is_summary and mins_since_last_upload < MIN_MINUTES_BETWEEN_UPLOADS:
+        wait_rem = int(MIN_MINUTES_BETWEEN_UPLOADS - mins_since_last_upload)
+        print(
+            f"⏳ [PACING] Last video was uploaded {int(mins_since_last_upload)}m ago. "
+            f"Waiting {wait_rem}m before next regular upload so YouTube algorithm boosts current video! "
+            f"({len(pending_queue)} videos safely in queue)"
+        )
+        return
+
     uploaded_in_this_run = 0
     remaining_queue = []
     youtube_limit_hit = False
 
     for idx, item in enumerate(pending_queue):
+        # Strictly upload ONLY 1 video per run (MAX_UPLOADS_PER_RUN = 1)
         if youtube_limit_hit or uploaded_in_this_run >= MAX_UPLOADS_PER_RUN or uploads_today >= MAX_DAILY_UPLOADS:
             remaining_queue.append(item)
             continue
@@ -600,7 +611,6 @@ def main():
         seo_desc = ai_info.get("seo_description") or original_title
         seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "ویدیوکست", "پشت خط"]
 
-        # انتخاب دقیق پلی‌لیست (شامل پلی‌لیست‌های اختصاصی ویدیوکست و پشت خط)
         if is_short_video and not is_sum and not is_vc and not is_pk:
             target_playlist = PLAYLIST_SHORTS
             if "#shorts" not in seo_title.lower():
@@ -632,7 +642,7 @@ def main():
 
         try:
             label = "MATCH SUMMARY" if is_sum else ("POSHTE KHAT" if is_pk else ("VIDEOCAST" if is_vc else "VIDEO"))
-            print(f"[UPLOAD] Publishing ({label}): {seo_title}")
+            print(f"[UPLOAD] Publishing 1 video ({label}): {seo_title}")
             vid_id = upload_to_youtube(
                 youtube, video_file, thumb_to_use, seo_title, final_description, seo_tags
             )
@@ -645,6 +655,7 @@ def main():
             history["uploaded_titles"].append(original_title)
             history["uploaded_titles"].append(seo_title)
             history["organized_playlist_vids"].append(vid_id)
+            history["last_upload_time"] = time.time()
 
             existing_titles.add(original_title)
             existing_titles.add(seo_title)
