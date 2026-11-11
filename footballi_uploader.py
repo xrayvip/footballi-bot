@@ -31,22 +31,40 @@ VIDEOCAST_KEYWORDS = getattr(
     ["ویدیوکست", "ویدیو کست", "ویدئوکست", "ویدئو کست", "پادکست"]
 )
 
+POSHTE_KHAT_KEYWORDS = getattr(
+    config,
+    "POSHTE_KHAT_KEYWORDS",
+    ["پشت خط", "پشت‌خط", "برنامه پشت خط"]
+)
+
+PLAYLIST_SUMMARY = "خلاصه بازی‌ها"
+PLAYLIST_VIDEOCAST = "ویدیوکست فوتبالی (برنامه اختصاصی)"
+PLAYLIST_POSHTE_KHAT = "پشت خط (برنامه اختصاصی فوتبالی)"
+PLAYLIST_NEWS = "مصاحبه و حواشی فوتبال ایران"
+PLAYLIST_SHORTS = "ویدیوهای کوتاه (Shorts)"
+
 
 def is_videocast(title, tags=""):
     combined = normalize_persian(f"{title} {tags}")
     return any(normalize_persian(k) in combined for k in VIDEOCAST_KEYWORDS)
 
 
+def is_poshte_khat(title, tags=""):
+    combined = normalize_persian(f"{title} {tags}")
+    return any(normalize_persian(k) in combined for k in POSHTE_KHAT_KEYWORDS)
+
+
 def item_priority_key(item):
     """
-    Sorts queue so the most valuable content always uploads first when quota opens:
     Priority 0: Match Summaries ('خلاصه بازی‌ها')
-    Priority 1: Exclusive Footballi Videocasts ('ویدیوکست')
-    Priority 2: Shorts & Fresh News
+    Priority 1: Exclusive Footballi Shows ('ویدیوکست' & 'پشت خط')
+    Priority 2: Shorts & General News
     """
+    t = item.get("title", "")
+    tags = item.get("tags", "")
     if item.get("is_summary"):
         return 0
-    if item.get("is_videocast") or is_videocast(item.get("title", ""), item.get("tags", "")):
+    if item.get("is_videocast") or item.get("is_poshte_khat") or is_videocast(t, tags) or is_poshte_khat(t, tags):
         return 1
     return 2
 
@@ -79,7 +97,9 @@ def deduplicate_queue(queue_list, seen_urls, seen_mp4s, existing_titles):
         if is_duplicate_title(orig_t, q_titles):
             continue
 
-        item["is_videocast"] = is_videocast(orig_t, item.get("tags", ""))
+        tags = item.get("tags", "")
+        item["is_videocast"] = is_videocast(orig_t, tags)
+        item["is_poshte_khat"] = is_poshte_khat(orig_t, tags)
 
         q_urls.add(u)
         q_mp4s.add(mp4)
@@ -104,6 +124,7 @@ def load_history():
                         "uploaded_mp4s": [],
                         "uploaded_titles": [],
                         "pending_queue": [],
+                        "organized_playlist_vids": [],
                         "last_apify_run": 0
                     }
                 if isinstance(data, dict):
@@ -111,6 +132,7 @@ def load_history():
                     data.setdefault("uploaded_mp4s", [])
                     data.setdefault("uploaded_titles", [])
                     data.setdefault("pending_queue", [])
+                    data.setdefault("organized_playlist_vids", [])
                     data.setdefault("last_apify_run", 0)
                     return data
         except Exception as e:
@@ -120,6 +142,7 @@ def load_history():
         "uploaded_mp4s": [],
         "uploaded_titles": [],
         "pending_queue": [],
+        "organized_playlist_vids": [],
         "last_apify_run": 0
     }
 
@@ -129,6 +152,7 @@ def save_history(history):
         history["uploaded_urls"] = list(dict.fromkeys(history.get("uploaded_urls", [])))[-2000:]
         history["uploaded_mp4s"] = list(dict.fromkeys(history.get("uploaded_mp4s", [])))[-2000:]
         history["uploaded_titles"] = list(dict.fromkeys(history.get("uploaded_titles", [])))[-1500:]
+        history["organized_playlist_vids"] = list(dict.fromkeys(history.get("organized_playlist_vids", [])))[-1000:]
 
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
@@ -157,6 +181,7 @@ def get_authenticated_service():
 def get_channel_status_and_24h_count(youtube):
     existing_titles = set()
     uploads_since_reset = 0
+    channel_videos = []
 
     try:
         now_utc = datetime.now(timezone.utc)
@@ -167,7 +192,7 @@ def get_channel_status_and_24h_count(youtube):
         ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
         items = ch_res.get("items", [])
         if not items:
-            return existing_titles, 0
+            return existing_titles, 0, []
 
         uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
         pl_res = youtube.playlistItems().list(
@@ -176,6 +201,7 @@ def get_channel_status_and_24h_count(youtube):
 
         for item in pl_res.get("items", []):
             snippet = item.get("snippet", {})
+            vid_id = snippet.get("resourceId", {}).get("videoId", "")
             title = snippet.get("title", "").strip()
             desc = snippet.get("description", "")
             pub_str = snippet.get("publishedAt", "")
@@ -183,11 +209,20 @@ def get_channel_status_and_24h_count(youtube):
             if title:
                 existing_titles.add(title)
 
+            orig_ref = ""
             for line in desc.splitlines():
                 if line.strip().startswith("RefTitle:"):
                     orig_ref = line.split("RefTitle:", 1)[1].strip()
                     if orig_ref:
                         existing_titles.add(orig_ref)
+
+            if vid_id:
+                channel_videos.append({
+                    "video_id": vid_id,
+                    "title": title,
+                    "ref_title": orig_ref,
+                    "description": desc
+                })
 
             if pub_str:
                 pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
@@ -199,10 +234,10 @@ def get_channel_status_and_24h_count(youtube):
             f"Uploads since 11:30 AM reset: {uploads_since_reset}/{MAX_DAILY_UPLOADS} "
             f"(Reserved for Match Summaries: {RESERVED_FOR_SUMMARIES})"
         )
-        return existing_titles, uploads_since_reset
+        return existing_titles, uploads_since_reset, channel_videos
     except Exception as e:
         print(f"[WARN] Failed to read channel upload history: {e}")
-        return existing_titles, 0
+        return existing_titles, 0, []
 
 
 def get_or_create_playlist(youtube, playlist_title, cache):
@@ -233,9 +268,36 @@ def get_or_create_playlist(youtube, playlist_title, cache):
         return None
 
 
-def add_video_to_playlist(youtube, video_id, playlist_id):
+def get_playlist_video_ids(youtube, playlist_id, members_cache):
+    """Fetches existing video IDs inside a playlist so we never add a video twice"""
+    if not playlist_id:
+        return set()
+    if playlist_id in members_cache:
+        return members_cache[playlist_id]
+
+    vid_ids = set()
+    try:
+        res = youtube.playlistItems().list(
+            part="snippet", playlistId=playlist_id, maxResults=50
+        ).execute()
+        for item in res.get("items", []):
+            v_id = item.get("snippet", {}).get("resourceId", {}).get("videoId")
+            if v_id:
+                vid_ids.add(v_id)
+    except Exception:
+        pass
+    members_cache[playlist_id] = vid_ids
+    return vid_ids
+
+
+def add_video_to_playlist(youtube, video_id, playlist_id, members_cache=None):
     if not playlist_id or not video_id:
         return
+    if members_cache is not None:
+        existing_members = get_playlist_video_ids(youtube, playlist_id, members_cache)
+        if video_id in existing_members:
+            return
+
     body = {
         "snippet": {
             "playlistId": playlist_id,
@@ -244,14 +306,15 @@ def add_video_to_playlist(youtube, video_id, playlist_id):
     }
     for attempt in range(1, 4):
         try:
-            time.sleep(3 * attempt)
+            time.sleep(2 * attempt)
             youtube.playlistItems().insert(part="snippet", body=body).execute()
+            if members_cache is not None and playlist_id in members_cache:
+                members_cache[playlist_id].add(video_id)
             print("[PLAYLIST] Video successfully added to playlist.")
             return
         except HttpError as e:
             status_code = getattr(e.resp, "status", None)
             if status_code in (409, 500, 503) and attempt < 3:
-                print(f"[PLAYLIST] Backend conflict (HTTP {status_code}), retrying in {attempt * 3}s...")
                 time.sleep(attempt * 3)
             else:
                 print(f"[WARN] Failed adding video to playlist: {e}")
@@ -259,6 +322,52 @@ def add_video_to_playlist(youtube, video_id, playlist_id):
         except Exception as e:
             print(f"[WARN] Failed adding video to playlist: {e}")
             break
+
+
+def organize_existing_channel_shows(youtube, channel_videos, history, playlist_cache):
+    """
+    Retroactively scans already-uploaded videos on the YouTube channel and places any
+    'ویدیوکست' (Videocast), 'پشت خط' (Poshte Khat), or 'خلاصه بازی' into their dedicated playlists!
+    """
+    organized_set = set(history.get("organized_playlist_vids", []))
+    members_cache = {}
+    organized_count = 0
+
+    for v in channel_videos:
+        vid_id = v["video_id"]
+        if vid_id in organized_set:
+            continue
+
+        combined_text = f"{v['title']} {v.get('ref_title', '')} {v.get('description', '')}"
+        target_pl_name = None
+
+        if "#shorts" in v["title"].lower():
+            organized_set.add(vid_id)
+            history["organized_playlist_vids"].append(vid_id)
+            continue
+        elif is_poshte_khat(combined_text):
+            target_pl_name = PLAYLIST_POSHTE_KHAT
+        elif is_videocast(combined_text):
+            target_pl_name = PLAYLIST_VIDEOCAST
+        elif is_match_summary(v["title"]) or is_match_summary(v.get("ref_title", "")):
+            target_pl_name = PLAYLIST_SUMMARY
+
+        if target_pl_name:
+            pl_id = get_or_create_playlist(youtube, target_pl_name, playlist_cache)
+            if pl_id:
+                existing_in_pl = get_playlist_video_ids(youtube, pl_id, members_cache)
+                if vid_id not in existing_in_pl:
+                    print(f"[ORGANIZER] Adding existing channel video '{v['title'][:40]}' -> '{target_pl_name}'")
+                    add_video_to_playlist(youtube, vid_id, pl_id, members_cache)
+                    organized_count += 1
+
+        organized_set.add(vid_id)
+        history["organized_playlist_vids"].append(vid_id)
+        if organized_count >= 6:
+            break
+
+    if organized_count > 0:
+        save_history(history)
 
 
 def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags):
@@ -306,13 +415,17 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (Videocast + Priority Queue Edition)...")
+    print("[START] Footballi Bot starting (Videocast + Poshte Khat + Auto-Organizer Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
-    existing_titles, uploads_today = get_channel_status_and_24h_count(youtube)
+    existing_titles, uploads_today, channel_videos = get_channel_status_and_24h_count(youtube)
     for t in history.get("uploaded_titles", []):
         existing_titles.add(t)
+
+    playlist_cache = {}
+    # 1. Automatically place any previously uploaded 'ویدیوکست' or 'پشت خط' on the channel into their playlists!
+    organize_existing_channel_shows(youtube, channel_videos, history, playlist_cache)
 
     seen_urls = set(history.get("uploaded_urls", []))
     seen_mp4s = set(history.get("uploaded_mp4s", []))
@@ -328,16 +441,26 @@ def main():
     queued_titles = {q["title"] for q in pending_queue}
     combined_known_titles = existing_titles | queued_titles
 
-    # Always scan for brand-new videos (especially Match Summaries & Videocasts)
     web_candidates = scrape_website_candidates(history, combined_known_titles, save_history)
     reel_candidates = fetch_instagram_reels(history, combined_known_titles, save_history)
 
     summaries = [c for c in web_candidates if c.get("is_summary") and c["url"] not in queued_urls]
-    videocasts = [c for c in web_candidates if not c.get("is_summary") and is_videocast(c.get("title", "")) and c["url"] not in queued_urls]
-    others = [c for c in web_candidates if not c.get("is_summary") and not is_videocast(c.get("title", "")) and c["url"] not in queued_urls]
+    exclusive_shows = [
+        c for c in web_candidates
+        if not c.get("is_summary")
+        and (is_videocast(c.get("title", "")) or is_poshte_khat(c.get("title", "")))
+        and c["url"] not in queued_urls
+    ]
+    others = [
+        c for c in web_candidates
+        if not c.get("is_summary")
+        and not is_videocast(c.get("title", ""))
+        and not is_poshte_khat(c.get("title", ""))
+        and c["url"] not in queued_urls
+    ]
     fresh_reels = [r for r in reel_candidates if r["url"] not in queued_urls]
 
-    fresh_pool = (summaries + videocasts + fresh_reels + others)[:20]
+    fresh_pool = (summaries + exclusive_shows + fresh_reels + others)[:20]
 
     newly_enriched = []
     for item in fresh_pool:
@@ -375,6 +498,7 @@ def main():
             item["thumb_url"] = details["thumb_url"]
             item["is_summary"] = is_match_summary(real_title)
             item["is_videocast"] = is_videocast(real_title, details["tags_text"])
+            item["is_poshte_khat"] = is_poshte_khat(real_title, details["tags_text"])
         else:
             mp4_u = item.get("mp4_url", "")
             if mp4_u in seen_mp4s or mp4_u in queued_mp4s:
@@ -383,6 +507,7 @@ def main():
             queued_mp4s.add(mp4_u)
             combined_known_titles.add(item["title"])
             item["is_videocast"] = False
+            item["is_poshte_khat"] = False
 
         newly_enriched.append(item)
 
@@ -413,7 +538,6 @@ def main():
         print(f"[QUOTA-WAIT] Daily quota ({uploads_today}/{MAX_DAILY_UPLOADS}) full. {len(pending_queue)} unique videos safely held in queue.")
         return
 
-    playlist_cache = {}
     uploaded_in_this_run = 0
     remaining_queue = []
     youtube_limit_hit = False
@@ -429,6 +553,7 @@ def main():
 
         is_sum = item.get("is_summary", False)
         is_vc = item.get("is_videocast", False) or is_videocast(item.get("title", ""), item.get("tags", ""))
+        is_pk = item.get("is_poshte_khat", False) or is_poshte_khat(item.get("title", ""), item.get("tags", ""))
 
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
             print(f"[RESERVE] Keeping '{item['title'][:40]}' in queue (saving slots for Match Summaries).")
@@ -446,14 +571,14 @@ def main():
 
         width, height, duration = inspect_video_file(video_file)
         is_vertical = height > width
-        is_short_video = is_vertical or (not is_sum and not is_vc and duration <= 120)
+        is_short_video = is_vertical or (not is_sum and not is_vc and not is_pk and duration <= 120)
 
         if not is_vertical:
             if is_sum and duration < 90:
                 print(f"[FAST SKIP] Clip too short for Match Summary ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 continue
-            if not is_sum and not is_vc and duration < 180:
+            if not is_sum and not is_vc and not is_pk and duration < 180:
                 print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 continue
@@ -465,22 +590,24 @@ def main():
         ai_info = item.get("ai_info", {})
         seo_title = ai_info.get("seo_title") or original_title
         seo_desc = ai_info.get("seo_description") or original_title
-        seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "ویدیوکست"]
+        seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "ویدیوکست", "پشت خط"]
 
-        # انتخاب دقیق پلی‌لیست (شامل پلی‌لیست جدید ویدیوکست)
-        if is_short_video and not is_sum and not is_vc:
-            target_playlist = "ویدیوهای کوتاه (Shorts)"
+        # انتخاب دقیق پلی‌لیست (شامل پلی‌لیست‌های اختصاصی ویدیوکست و پشت خط)
+        if is_short_video and not is_sum and not is_vc and not is_pk:
+            target_playlist = PLAYLIST_SHORTS
             if "#shorts" not in seo_title.lower():
                 seo_title = f"{seo_title[:88]} #shorts"
             thumb_to_use = None
         else:
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
             if is_sum:
-                target_playlist = "خلاصه بازی‌ها"
+                target_playlist = PLAYLIST_SUMMARY
+            elif is_pk:
+                target_playlist = PLAYLIST_POSHTE_KHAT
             elif is_vc:
-                target_playlist = "ویدیوکست فوتبالی (برنامه اختصاصی)"
+                target_playlist = PLAYLIST_VIDEOCAST
             else:
-                target_playlist = "مصاحبه و حواشی فوتبال ایران"
+                target_playlist = PLAYLIST_NEWS
 
             thumb_to_use = prepare_clean_thumbnail(
                 video_file,
@@ -496,7 +623,7 @@ def main():
         )
 
         try:
-            label = "MATCH SUMMARY" if is_sum else ("VIDEOCAST" if is_vc else "VIDEO")
+            label = "MATCH SUMMARY" if is_sum else ("POSHTE KHAT" if is_pk else ("VIDEOCAST" if is_vc else "VIDEO"))
             print(f"[UPLOAD] Publishing ({label}): {seo_title}")
             vid_id = upload_to_youtube(
                 youtube, video_file, thumb_to_use, seo_title, final_description, seo_tags
@@ -509,6 +636,7 @@ def main():
             history["uploaded_mp4s"].append(item["mp4_url"])
             history["uploaded_titles"].append(original_title)
             history["uploaded_titles"].append(seo_title)
+            history["organized_playlist_vids"].append(vid_id)
 
             existing_titles.add(original_title)
             existing_titles.add(seo_title)
