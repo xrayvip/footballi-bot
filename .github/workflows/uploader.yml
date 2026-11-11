@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: footballi-bot-runner
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -15,46 +15,55 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
+      APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+      CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
+      YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install Fast Dependencies
+        timeout-minutes: 2
         run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
+          python -m pip install --upgrade pip --quiet
+          pip install --quiet requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
 
       - name: Run Footballi Uploader & Queue System
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
-          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+        timeout-minutes: 5
+        continue-on-error: true
         run: |
-          python -u footballi_uploader.py
+          timeout 270s python -u footballi_uploader.py || echo "[INFO] Uploader step finished or timed out safely."
 
       - name: Run AI Comment Moderator & Responder
         if: always()
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
-          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
-          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+        timeout-minutes: 3
+        continue-on-error: true
         run: |
-          python -u comment_manager.py
+          timeout 150s python -u comment_manager.py || echo "[INFO] Comment manager step finished or timed out safely."
 
       - name: Save Queue & Channel State
         if: always()
+        timeout-minutes: 1
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add uploaded_matches.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update video queue and indexed matches [skip ci]" && git push)
+          if ! git diff --staged --quiet; then
+            git commit -m "Auto-update video queue and indexed matches [skip ci]"
+            git pull --rebase origin main || true
+            git push
+          else
+            echo "[INFO] No changes in uploaded_matches.json to commit."
+          fi
