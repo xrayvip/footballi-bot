@@ -183,7 +183,8 @@
     "https://footballi.net/video/1074118",
     "https://footballi.net/video/1073521/%D9%88%DB%8C%D8%AF%DB%8C%D9%88%DA%A9%D8%B3%D8%AA-%D8%A7%D8%B2-%D8%B4%D8%B9%D8%A7%D8%B1-%D8%B9%D9%84%DB%8C%D9%87-%D8%AA%D8%A7%D8%B1%D8%AA%D8%A7%D8%B1-%D8%AA%D8%A7-%D8%AC%D9%86%D8%AC%D8%A7%D9%8„-%DA%A9%D8%B4%D8%A7%D9%„%D9%87-%D8%A2%D8%B3%D8%A7%D9%86%DB%8C",
     "https://footballi.net/video/1074119",
-    "https://footballi.net/video/1074120"
+    "https://footballi.net/video/1074120",
+    "https://footballi.net/video/1074121"
   ],
   "uploaded_titles": [
     "خلاصه و حواشی بازی استقلال 5-1 آلومینیوم اراک",
@@ -332,7 +333,8 @@
           "ناراحتی فرشاد فرجی",
           "نقل و انتقالات"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074057/%D8%AF%D9%82%D8%A7%DB%8C%D9%82%DB%8C-%D8%A7%D8%B2-%D9%86%D8%AE%D8%B3%D8%AA%DB%8C%D9%86-%D8%AA%D9%85%D8%B1%DB%8C%D9%86-%D8%AA%DB%8C%D9%85-%D9%85%D9%84%DB%8C-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%AF%D8%B1-%D8%A8%D8%B5%D8%B1%D8%A9",
@@ -362,7 +364,8 @@
           "گزارش تمرین",
           "فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074063/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D9%82%D8%B1%D8%A%D8%A7%D8%B1%D8%AF%D8%A7%D8%AF%D9%85-%D8%B1%D8%A7-%D8%A8%D8%A7-%D9%88%DB%8C%D8%A7%D8%B1%D8%A6%D8%A7%D9%84-%D8%A8%D8%B3%D8%AA%D9%87-%D8%A8%D9%88%D8%AF%D9%85-%D9%88%D9%_DB%8C",
@@ -392,7 +395,8 @@
           "ناگفته های فوتبال",
           "رسانه فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074071/%D8%AA%D9%88%D8%B6%DB%8C%D8%AD-%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D8%A7%D8%AD%D8%AA%D9%85%D8%A7%D9%84-%D8%AC%D8%B0%D8%A8-%D9%85%D8%AD%D9%85%D8%AF-%D9%82%D8%B1%D8%A8%D8%A7%D9%86%DB%8C-%D8%A8%D8%B1%D8%A7%DB%8C-%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
@@ -422,7 +426,8 @@
           "فوتبالی",
           "حواشی لیگ برتر"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074070/%D8%B2%D9%85%D8%A7%D9%86-%D8%A8%D8%A7%D8%B2%DA%AF%D8%B4%D8%AA-%D9%87%D8%A7%D8%B4%D9%85-%D9%86%DA%98%D8%A7%D8%AF-%D9%88-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%B1%D8%A7%D8%A8%DB%8C-%D8%A7%D8%B2-%D8%B2%D8%A8%D8%A7%D9%86-%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85",
@@ -452,7 +457,8 @@
           "فوتبال ایران",
           "فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074076/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%86%D8%A7%D9%85-%D8%A7%D9%85%DB%8C%D8%AF%D9%88%D8%A7%D8%B1%D9%85-%D8%A8%DB%8C%D8%B1%D8%A7%D9%86%D9%88%D9%86%D8%AF-%D8%B2%D9%88%D8%AF%D8%AA%D8%B1-%D8%A8%D8%B1%DA%AF%D8%B1%D8%AF%D8%AF-%D8%AA%D8%A7-%D8%A7%D8%B2-%D8%A7%D9%88-%D8%A7%D8%B3%D8%AA%D9%81%D8%A7%D8%AF%D9%87-%DA%A9%D9%86%DB%8C%D9%85",
@@ -482,7 +488,8 @@
           "فوتبالی",
           "حواشی لیگ برتر"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074105/%D8%B4%D9%86%DB%8C%D8%AF%D9%87-%D9%87%D8%A7%DB%8C-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D9%88%D8%AA%D9%88%D9%86%DA%86%DB%8C-%D9%88-%D8%AA%D8%AD%D9%84%DB%8C%D9%84-%D9%86%D9%88%DB%8C%D8%AF-%D9%85%D8%B8%D9%81%D8%B1%DB%8C-%D8%A7%D8%B2-%D9%85%D8%A7%D8%AC%D8%B1%D8%A7%DB%8C-%DB%8C%D8%A7%D8%B3%D8%B1-%D8%A2%D8%B3%D8%A7%D9%86%DB%8C",
@@ -513,7 +520,8 @@
           "رسانه فوتبالی",
           "کارشناسی فوتبال"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074104/%DA%A9%D8%A7%D8%B1%D8%B4%D9%86%D8%A7%D8%B3%DB%8C-%D8%AF%D8%A7%D9%88%D8%B1%DB%8C-%D8%AF%DB%8C%D8%AF%D8%A7%D8%B1-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%AE%D9%88%D8%B2%D8%B3%D8%AA%D8%A7%D9%86-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%A8%D8%A7-%D9%86%D9%88%DB%8C%D8%AF-%D9%85%D8%B8%D9%81%D8%B1%DB%8C",
@@ -544,7 +552,8 @@
           "رسانه فوتبالی",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074103/%DA%A9%D8%A7%D8%B1%D8%B4%D9%86%D8%A7%D8%B3%DB%8C-%D8%AF%D8%A7%D9%88%D8%B1%DB%8C-%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1-%D8%AE%DB%8C%D8%A8%D8%B1-%D8%AE%D8%B1%D9%85-%D8%A2%D8%A8%D8%A7%D8%AF-%D8%A8%D8%A7-%D9%86%D9%88%DB%8C%D8%AF-%D9%85%D8%B8%D9%81%D8%B1%DB%8C",
@@ -575,7 +584,8 @@
           "رسانه فوتبالی",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074102/%DA%A9%D8%A7%D8%B1%D8%B4%D9%86%D8%A7%D8%B3%DB%8C-%D8%AF%D8%A7%D9%88%D8%B1%DB%8C-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3-%D9%81%D8%AC%D8%B1%D8%B3%D9%BE%D8%A7%D8%B3%DB%8C-%D8%A8%D8%A7-%D9%86%D9%88%DB%8C%D8%AF-%D9%85%D8%B8%D9%81%D8%B1%DB%8C",
@@ -606,7 +616,8 @@
           "رسانه فوتبالی",
           "داور مسابقه"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074101/%DA%A9%D8%A7%D8%B1%D8%B4%D9%86%D8%A7%D8%B3%DB%8C-%D8%AF%D8%A7%D9%88%D8%B1%DB%8C-%D8%AF%DB%8C%D8%AF%D8%A7%D8%B1-%D8%B3%D9%BE%D8%A7%D9%87%D8%A7%D9%86-%D9%85%D9%84%D9%88%D8%A7%D9%86-%D8%A8%D8%A7-%D9%86%D9%88%DB%8C%D8%AF-%D9%85%D8%B8%D9%81%D8%B1%DB%8C",
@@ -637,7 +648,8 @@
           "رسانه فوتبالی",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074100/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D9%BE%D8%B3%D8%B1%D9%85-%D8%A8%D9%87-%D8%AF%D9%86%DB%8C%D8%A7-%D8%A2%D9%85%D8%AF%D8%8C-%D8%A7%D9%88%D9%84%DB%8C%D9%86-%D8%A8%D8%A7%D8%B1-%D9%84%D8%A8%D8%A7%D8%B3-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%B1%D8%A7-%D8%AA%D9%86%D8%B4-%DA%A9%D8%B1%D8%AF%D9%85",
@@ -668,7 +680,8 @@
           "فرزند نکونام",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074099/%D8%A2%D8%B1%DB%8C%D8%A7%D9%86-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%A7%D9%84%DA%AF%D9%88%DB%8C%D9%85-%D8%AF%D8%B1-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D9%BE%D8%AF%D8%B1%D9%85-%D9%88-%D8%B3%D8%B1%D8%AE%DB%8C%D9%88-%D8%A8%D9%88%D8%B3%DA%A9%D8%AA%D8%B3-%D9%87%D8%B3%D8%AA%D9%86%D8%AF",
@@ -699,7 +712,8 @@
           "لیگ برتر خلیج فارس",
           "فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074098/%D8%A7%D9%88%D8%B3%D8%AA%D9%88%D9%86-%D8%A7%D9%88%D8%B1%D9%88%D9%86%D9%88%D9%81-%D8%AF%D8%B1-%D9%84%DB%8C%D8%B3%D8%AA-%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%A8%D8%B1%D8%A7%DB%8C-%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
@@ -730,7 +744,8 @@
           "لیگ برتر خلیج فارس",
           "شایعات نقل و انتقالات"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074097/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%B1%DA%A9%D9%88%D8%B1%D8%AF%D9%87%D8%A7-%D8%A8%D8%B1%D8%A7%DB%8C-%D8%B4%DA%A9%D8%B3%D8%AA%D9%86-%D8%A7%D8%B3%D8%AA%D8%8C-%D8%AD%D8%A7%D8%AC-%D8%B5%D9%81%DB%8C-%D9%84%DB%8C%D8%A7%D9%82%D8%AA%D8%B4-%D8%B1%D8%A7-%D8%AF%D8%A7%D8%B4%D8%AA",
@@ -761,7 +776,8 @@
           "فوتبالی",
           "کاپیتان تیم ملی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074096/%D9%88%D8%A7%DA%A9%D9%86%D8%B4-%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%A8%D9%87-%D8%A7%D8%AD%D8%AA%D9%85%D8%A7%D9%84-%D8%AC%D8%B0%D8%A8-%D8%B3%D8%B1%D8%AF%D8%A7%D8%B1-%D8%A2%D8%B2%D9%85%D9%88%D9%86",
@@ -792,7 +808,8 @@
           "لیگ برتر خلیج فارس",
           "مصاحبه"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074095/%D8%A7%D8%AF%D8%B9%D8%A7%DB%8C-%D8%B9%D8%AC%DB%8C%D8%A8-%D9%88-%D8%A8%D8%A7%D9%88%D8%B1%D9%86%DA%A9%D8%B1%D8%AF%D9%86%DB%8C-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D8%B3%D8%A7%DA%A9%D8%AA-%D8%A7%D9%84%D9%87%D8%A7%D9%85%DB%8C%D8%8C-%D8%A7%D9%88%D8%B3%D9%85%D8%A7%D8%B1-%D9%88-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
@@ -823,7 +840,8 @@
           "رسانه فوتبالی",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074093/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%AF%D8%B1-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%A8%D8%A7%DB%8C%D8%AF-%D8%A8%D8%B1%D8%AA%D8%B1%DB%8C%D9%86-%D8%B3%D8%B1%D9%85%D8%B1%D8%A8%DB%8C-%D9%81%D8%B5%D9%84-%D9%85%DB%8C-%D8%B4%D8%AF%D9%85",
@@ -854,7 +872,8 @@
           "لیگ برتر خلیج فارس",
           "فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074092/%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%DA%A9%D9%84-%D9%85%D8%B0%D8%A7%DA%A9%D8%B1%D9%87-%D9%88-%D9%82%D8%B1%D8%A7%D8%B1%D8%AF%D8%A7%D8%AF-%D9%85%D9%86-%D8%A8%D8%A7-%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1-%D8%B3%D9%87-%D8%B3%D8%A7%D8%B9%D8%AA-%D8%B4%D8%AF",
@@ -885,7 +904,8 @@
           "لیگ برتر خلیج فارس",
           "فوتبالی"
         ]
-      }
+      },
+      "is_videocast": false
     },
     {
       "url": "https://footballi.net/video/1074106/%DA%A9%D8%A7%D8%B1%D8%B4%D9%86%D8%A7%D8%B3%DB%8C-%D8%AF%D8%A7%D9%88%D8%B1%DB%8C-%D8%B3%D8%A7%DB%8C%D8%B1-%D8%AF%DB%8C%D8%AF%D8%A7%D8%B1%D9%87%D8%A7%DB%8C-%D9%87%D9%81%D8%AA%D9%87-%D8%AF%D9%88%D8%A7%D8%B2%D8%AF%D9%87%D9%85-%D9%84%DB%8C%DA%AF-%D8%A8%D8%B1%D8%AA%D8%B1",
@@ -915,7 +935,8 @@
           "فوتبال ایران",
           "لیگ برتر خلیج فارس"
         ]
-      }
+      },
+      "is_videocast": false
     }
   ]
 }
