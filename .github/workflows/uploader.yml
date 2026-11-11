@@ -24,6 +24,7 @@ jobs:
       APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
       CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
       YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
 
     steps:
       - name: Checkout Repository
@@ -34,29 +35,37 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Fast Dependencies
-        timeout-minutes: 2
+      - name: Run Full Footballi Pipeline (All-in-One Log)
+        timeout-minutes: 9
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 [1/4] Installing FFmpeg & Python Libraries..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           python -m pip install --upgrade pip --quiet
           pip install --quiet requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
+          echo "✅ Dependencies & FFmpeg ready!"
 
-      - name: Run Footballi Uploader & Queue System
-        timeout-minutes: 5
-        continue-on-error: true
-        run: |
-          timeout 270s python -u footballi_uploader.py || echo "[INFO] Uploader step finished or timed out safely."
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎬 [2/4] Running Footballi Video Uploader & Queue..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          timeout 270s python -u footballi_uploader.py || echo "⚠️ [INFO] Uploader step finished or timed out safely."
 
-      - name: Run AI Comment Moderator & Responder
-        if: always()
-        timeout-minutes: 3
-        continue-on-error: true
-        run: |
-          timeout 150s python -u comment_manager.py || echo "[INFO] Comment manager step finished or timed out safely."
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "💬 [3/4] Running AI Comment Moderator & Responder..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "🔄 Manual run detected: Resetting processed_comments cache so all existing unreplied comments are checked..."
+            python -c 'import json, os; p="uploaded_matches.json"; d=json.load(open(p,encoding="utf-8")) if os.path.exists(p) else {}; c=len(d.get("processed_comments",[])); d["processed_comments"]=[]; json.dump(d,open(p,"w",encoding="utf-8"),ensure_ascii=False,indent=2) if os.path.exists(p) else None; print(f"[CACHE-RESET] Cleared {c} cached comment IDs for fresh full-channel scan.")'
+          fi
+          timeout 180s python -u comment_manager.py || echo "⚠️ [INFO] Comment manager step finished or timed out safely."
 
-      - name: Save Queue & Channel State
-        if: always()
-        timeout-minutes: 1
-        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "💾 [4/4] Saving Queue & Channel State to GitHub..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add uploaded_matches.json
@@ -64,6 +73,7 @@ jobs:
             git commit -m "Auto-update video queue and indexed matches [skip ci]"
             git pull --rebase origin main || true
             git push
+            echo "✅ State saved and pushed successfully!"
           else
-            echo "[INFO] No changes in uploaded_matches.json to commit."
+            echo "ℹ️ No changes in uploaded_matches.json to commit."
           fi
