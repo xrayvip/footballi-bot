@@ -44,6 +44,7 @@ jobs:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: |
           python -u footballi_uploader.py
+          python -u comment_manager.py
 
       - name: Save Upload History
         run: |
