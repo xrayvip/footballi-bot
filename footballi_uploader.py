@@ -15,6 +15,7 @@ from config import (
     PROTO, HISTORY_FILE, TOKEN_FILE,
     MAX_DAILY_UPLOADS, RESERVED_FOR_SUMMARIES, MAX_UPLOADS_PER_RUN
 )
+import config
 from ai_seo import ai_batch_evaluate
 from scrapers import (
     scrape_website_candidates, extract_video_details_from_page,
@@ -24,13 +25,33 @@ from media_utils import (
     inspect_video_file, enhance_short_to_1080p, download_file, prepare_clean_thumbnail
 )
 
+VIDEOCAST_KEYWORDS = getattr(
+    config,
+    "VIDEOCAST_KEYWORDS",
+    ["ویدیوکست", "ویدیو کست", "ویدئوکست", "ویدئو کست", "پادکست"]
+)
+
+
+def is_videocast(title, tags=""):
+    combined = normalize_persian(f"{title} {tags}")
+    return any(normalize_persian(k) in combined for k in VIDEOCAST_KEYWORDS)
+
+
+def item_priority_key(item):
+    """
+    Sorts queue so the most valuable content always uploads first when quota opens:
+    Priority 0: Match Summaries ('خلاصه بازی‌ها')
+    Priority 1: Exclusive Footballi Videocasts ('ویدیوکست')
+    Priority 2: Shorts & Fresh News
+    """
+    if item.get("is_summary"):
+        return 0
+    if item.get("is_videocast") or is_videocast(item.get("title", ""), item.get("tags", "")):
+        return 1
+    return 2
+
 
 def deduplicate_queue(queue_list, seen_urls, seen_mp4s, existing_titles):
-    """
-    4-Layer Strict Deduplication for Pending Queue:
-    Ensures NO two items in the queue share the same URL, same MP4 stream,
-    same original title, or same SEO title, and none are already on the channel.
-    """
     clean_queue = []
     q_urls = set()
     q_mp4s = set()
@@ -48,17 +69,17 @@ def deduplicate_queue(queue_list, seen_urls, seen_mp4s, existing_titles):
         if not u or not mp4 or not norm_t:
             continue
 
-        # 1. Skip if already uploaded to YouTube channel
         if mp4 in seen_mp4s:
             continue
         if is_duplicate_title(orig_t, existing_titles) or (seo_t and is_duplicate_title(seo_t, existing_titles)):
             continue
 
-        # 2. Skip if already present inside this queue (by URL, MP4, or Title)
         if u in q_urls or mp4 in q_mp4s or norm_t in q_titles:
             continue
         if is_duplicate_title(orig_t, q_titles):
             continue
+
+        item["is_videocast"] = is_videocast(orig_t, item.get("tags", ""))
 
         q_urls.add(u)
         q_mp4s.add(mp4)
@@ -68,9 +89,8 @@ def deduplicate_queue(queue_list, seen_urls, seen_mp4s, existing_titles):
 
         clean_queue.append(item)
 
-    # Always keep Match Summaries at the top of the queue
-    clean_queue.sort(key=lambda x: (0 if x.get("is_summary") else 1))
-    return clean_queue[:40]
+    clean_queue.sort(key=item_priority_key)
+    return clean_queue[:45]
 
 
 def load_history():
@@ -206,6 +226,7 @@ def get_or_create_playlist(youtube, playlist_title, cache):
         created = youtube.playlists().insert(part="snippet,status", body=body).execute()
         pl_id = created["id"]
         cache[playlist_title] = pl_id
+        print(f"[PLAYLIST] Created new official playlist: '{playlist_title}'")
         return pl_id
     except Exception as e:
         print(f"[WARN] Could not get/create playlist '{playlist_title}': {e}")
@@ -285,7 +306,7 @@ def upload_to_youtube(youtube, video_path, thumb_path, title, description, tags)
 
 
 def main():
-    print("[START] Footballi Bot starting (4-Layer Zero-Duplicate Queue Edition)...")
+    print("[START] Footballi Bot starting (Videocast + Priority Queue Edition)...")
     history = load_history()
     youtube = get_authenticated_service()
 
@@ -296,30 +317,27 @@ def main():
     seen_urls = set(history.get("uploaded_urls", []))
     seen_mp4s = set(history.get("uploaded_mp4s", []))
 
-    # 1. Clean and deduplicate existing pending_queue against live channel & seen_mp4s
     pending_queue = deduplicate_queue(
         history.get("pending_queue", []), seen_urls, seen_mp4s, existing_titles
     )
     if pending_queue:
         print(f"[QUEUE] {len(pending_queue)} unique verified videos ready in Pending Queue.")
 
-    # Track everything currently in queue so scraper NEVER re-scrapes or duplicates them
     queued_urls = {q["url"] for q in pending_queue}
     queued_mp4s = {q["mp4_url"] for q in pending_queue}
     queued_titles = {q["title"] for q in pending_queue}
-
-    # Temporarily pass (existing_titles + queued_titles) to scraper so queued items are ignored during crawl
     combined_known_titles = existing_titles | queued_titles
 
-    # 2. Discover brand-new videos not in history AND not already in pending_queue
+    # Always scan for brand-new videos (especially Match Summaries & Videocasts)
     web_candidates = scrape_website_candidates(history, combined_known_titles, save_history)
     reel_candidates = fetch_instagram_reels(history, combined_known_titles, save_history)
 
     summaries = [c for c in web_candidates if c.get("is_summary") and c["url"] not in queued_urls]
-    others = [c for c in web_candidates if not c.get("is_summary") and c["url"] not in queued_urls]
+    videocasts = [c for c in web_candidates if not c.get("is_summary") and is_videocast(c.get("title", "")) and c["url"] not in queued_urls]
+    others = [c for c in web_candidates if not c.get("is_summary") and not is_videocast(c.get("title", "")) and c["url"] not in queued_urls]
     fresh_reels = [r for r in reel_candidates if r["url"] not in queued_urls]
 
-    fresh_pool = (summaries + fresh_reels + others)[:20]
+    fresh_pool = (summaries + videocasts + fresh_reels + others)[:20]
 
     newly_enriched = []
     for item in fresh_pool:
@@ -356,6 +374,7 @@ def main():
             item["tags"] = details["tags_text"]
             item["thumb_url"] = details["thumb_url"]
             item["is_summary"] = is_match_summary(real_title)
+            item["is_videocast"] = is_videocast(real_title, details["tags_text"])
         else:
             mp4_u = item.get("mp4_url", "")
             if mp4_u in seen_mp4s or mp4_u in queued_mp4s:
@@ -363,6 +382,7 @@ def main():
             queued_urls.add(item["url"])
             queued_mp4s.add(mp4_u)
             combined_known_titles.add(item["title"])
+            item["is_videocast"] = False
 
         newly_enriched.append(item)
 
@@ -370,7 +390,6 @@ def main():
         ai_results = ai_batch_evaluate(newly_enriched)
         for idx, item in enumerate(newly_enriched):
             ai_info = ai_results.get(idx)
-            # Mark URL in uploaded_urls immediately so it is never re-evaluated by AI in future runs!
             history["uploaded_urls"].append(item["url"])
             seen_urls.add(item["url"])
 
@@ -382,7 +401,6 @@ def main():
             item["ai_info"] = ai_info
             pending_queue.append(item)
 
-    # Final strict deduplication of combined queue
     pending_queue = deduplicate_queue(pending_queue, seen_urls, seen_mp4s, existing_titles)
     history["pending_queue"] = pending_queue
     save_history(history)
@@ -405,12 +423,13 @@ def main():
             remaining_queue.append(item)
             continue
 
-        # Just-In-Time Duplicate Check right before downloading/uploading
         if item["mp4_url"] in seen_mp4s or is_duplicate_title(item["title"], existing_titles):
             print(f"[DUP-GUARD] Skipping already-uploaded video: {item['title'][:45]}")
             continue
 
         is_sum = item.get("is_summary", False)
+        is_vc = item.get("is_videocast", False) or is_videocast(item.get("title", ""), item.get("tags", ""))
+
         if not is_sum and uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_FOR_SUMMARIES):
             print(f"[RESERVE] Keeping '{item['title'][:40]}' in queue (saving slots for Match Summaries).")
             remaining_queue.append(item)
@@ -420,7 +439,6 @@ def main():
         thumb_file = f"temp_thumb_{idx}.jpg"
 
         if not download_file(item["mp4_url"], video_file):
-            # Drop broken download links after 2 failed attempts so they don't clog the queue
             item["retries"] = item.get("retries", 0) + 1
             if item["retries"] <= 2:
                 remaining_queue.append(item)
@@ -428,14 +446,14 @@ def main():
 
         width, height, duration = inspect_video_file(video_file)
         is_vertical = height > width
-        is_short_video = is_vertical or (not is_sum and duration <= 120)
+        is_short_video = is_vertical or (not is_sum and not is_vc and duration <= 120)
 
         if not is_vertical:
             if is_sum and duration < 90:
                 print(f"[FAST SKIP] Clip too short for Match Summary ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 continue
-            if not is_sum and duration < 180:
+            if not is_sum and not is_vc and duration < 180:
                 print(f"[FAST SKIP] Horizontal video shorter than 3 mins ({int(duration)}s): {item['title']}")
                 os.remove(video_file)
                 continue
@@ -447,16 +465,22 @@ def main():
         ai_info = item.get("ai_info", {})
         seo_title = ai_info.get("seo_title") or original_title
         seo_desc = ai_info.get("seo_description") or original_title
-        seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران"]
+        seo_tags = ai_info.get("seo_tags") or ["فوتبالی", "فوتبال ایران", "لیگ برتر ایران", "ویدیوکست"]
 
-        if is_short_video and not is_sum:
+        # انتخاب دقیق پلی‌لیست (شامل پلی‌لیست جدید ویدیوکست)
+        if is_short_video and not is_sum and not is_vc:
             target_playlist = "ویدیوهای کوتاه (Shorts)"
             if "#shorts" not in seo_title.lower():
                 seo_title = f"{seo_title[:88]} #shorts"
             thumb_to_use = None
         else:
             seo_title = re.sub(r"#shorts", "", seo_title, flags=re.IGNORECASE).strip()
-            target_playlist = "خلاصه بازی‌ها" if is_sum else "مصاحبه و حواشی فوتبال ایران"
+            if is_sum:
+                target_playlist = "خلاصه بازی‌ها"
+            elif is_vc:
+                target_playlist = "ویدیوکست فوتبالی (برنامه اختصاصی)"
+            else:
+                target_playlist = "مصاحبه و حواشی فوتبال ایران"
 
             thumb_to_use = prepare_clean_thumbnail(
                 video_file,
@@ -472,7 +496,8 @@ def main():
         )
 
         try:
-            print(f"[UPLOAD] Publishing ({'MATCH SUMMARY' if is_sum else 'VIDEO'}): {seo_title}")
+            label = "MATCH SUMMARY" if is_sum else ("VIDEOCAST" if is_vc else "VIDEO")
+            print(f"[UPLOAD] Publishing ({label}): {seo_title}")
             vid_id = upload_to_youtube(
                 youtube, video_file, thumb_to_use, seo_title, final_description, seo_tags
             )
@@ -480,7 +505,6 @@ def main():
             pl_id = get_or_create_playlist(youtube, target_playlist, playlist_cache)
             add_video_to_playlist(youtube, vid_id, pl_id)
 
-            # Record permanently as uploaded in all sets
             history["uploaded_urls"].append(item["url"])
             history["uploaded_mp4s"].append(item["mp4_url"])
             history["uploaded_titles"].append(original_title)
