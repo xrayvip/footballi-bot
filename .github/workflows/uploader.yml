@@ -12,6 +12,7 @@ concurrency:
 jobs:
   upload:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -24,10 +25,11 @@ jobs:
           python-version: '3.11'
 
       - name: Install FFmpeg & Fast Dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-          pip install -q requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow playwright
-          playwright install chromium
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends ffmpeg
+          pip install -q requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
 
       - name: Restore Credentials
         env:
@@ -37,7 +39,7 @@ jobs:
           echo "$CLIENT_SECRETS" > client_secrets.json
           echo "$YOUTUBE_TOKEN" > token.json
 
-      - name: Run Uploader Bot
+      - name: Run Uploader & Comment Manager Agents
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
