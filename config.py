@@ -59,3 +59,7 @@ SUMMARY_KEYWORDS = [
 VIDEOCAST_KEYWORDS = [
     "ویدیوکست", "ویدیو کست", "ویدئوکست", "ویدئو کست", "پادکست"
 ]
+
+POSHTE_KHAT_KEYWORDS = [
+    "پشت خط", "پشت‌خط", "برنامه پشت خط"
+]
