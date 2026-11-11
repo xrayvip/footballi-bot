@@ -15,7 +15,7 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
 
     env:
       PYTHONUNBUFFERED: "1"
@@ -35,37 +35,29 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run Full Footballi Pipeline (All-in-One Log)
-        timeout-minutes: 9
+      - name: Run Footballi Pipeline (All-in-One Live Log)
+        timeout-minutes: 7
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 [1/4] Installing FFmpeg & Python Libraries..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          python -m pip install --upgrade pip --quiet
-          pip install --quiet requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
-          echo "✅ Dependencies & FFmpeg ready!"
-
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🎬 [2/4] Running Footballi Video Uploader & Queue..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          timeout 270s python -u footballi_uploader.py || echo "⚠️ [INFO] Uploader step finished or timed out safely."
-
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "💬 [3/4] Running AI Comment Moderator & Responder..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "🔄 Manual run detected: Resetting processed_comments cache so all existing unreplied comments are checked..."
-            python -c 'import json, os; p="uploaded_matches.json"; d=json.load(open(p,encoding="utf-8")) if os.path.exists(p) else {}; c=len(d.get("processed_comments",[])); d["processed_comments"]=[]; json.dump(d,open(p,"w",encoding="utf-8"),ensure_ascii=False,indent=2) if os.path.exists(p) else None; print(f"[CACHE-RESET] Cleared {c} cached comment IDs for fresh full-channel scan.")'
+          echo "=== [1/4] Fast Setup: FFmpeg Static Binary & Python Packages (No apt-get) ==="
+          if ! command -v ffmpeg &> /dev/null; then
+            curl --max-time 25 -sL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | sudo tar -xJ --strip-components=2 -C /usr/local/bin --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
           fi
-          timeout 180s python -u comment_manager.py || echo "⚠️ [INFO] Comment manager step finished or timed out safely."
+          pip install --quiet --disable-pip-version-check requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
+          echo "✅ Setup completed in seconds! FFmpeg: $(which ffmpeg)"
 
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "💾 [4/4] Saving Queue & Channel State to GitHub..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "=== [2/4] Running Footballi Video Uploader & Queue ==="
+          timeout --kill-after=10s 210s stdbuf -oL -eL python -u footballi_uploader.py || echo "⚠️ [INFO] Uploader step finished."
+
+          echo ""
+          echo "=== [3/4] Running AI Comment Moderator & Responder ==="
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            python -c 'import json, os; p="uploaded_matches.json"; d=json.load(open(p,encoding="utf-8")) if os.path.exists(p) else {}; c=len(d.get("processed_comments",[])); d["processed_comments"]=[]; json.dump(d,open(p,"w",encoding="utf-8"),ensure_ascii=False,indent=2) if os.path.exists(p) else None; print(f"[CACHE-RESET] Cleared {c} cached comment IDs for manual full-channel scan.")'
+          fi
+          timeout --kill-after=10s 120s stdbuf -oL -eL python -u comment_manager.py || echo "⚠️ [INFO] Comment manager step finished."
+
+          echo ""
+          echo "=== [4/4] Saving Queue & Channel State ==="
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add uploaded_matches.json
@@ -73,7 +65,7 @@ jobs:
             git commit -m "Auto-update video queue and indexed matches [skip ci]"
             git pull --rebase origin main || true
             git push
-            echo "✅ State saved and pushed successfully!"
+            echo "✅ State saved and pushed!"
           else
-            echo "ℹ️ No changes in uploaded_matches.json to commit."
+            echo "ℹ️ No changes to commit."
           fi
