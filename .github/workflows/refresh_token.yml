@@ -36,7 +36,11 @@ jobs:
           client_id = cfg["client_id"]
           client_secret = cfg["client_secret"]
           redirect_uri = "http://localhost:8080/"
-          scope = "https://www.googleapis.com/auth/youtube"
+          scopes = [
+              "https://www.googleapis.com/auth/youtube",
+              "https://www.googleapis.com/auth/youtube.force-ssl"
+          ]
+          scope_str = " ".join(scopes)
 
           user_in = os.environ.get("INPUT_VAL", "").strip()
 
@@ -45,7 +49,7 @@ jobs:
                   "client_id": client_id,
                   "redirect_uri": redirect_uri,
                   "response_type": "code",
-                  "scope": scope,
+                  "scope": scope_str,
                   "access_type": "offline",
                   "prompt": "consent"
               }
@@ -55,8 +59,7 @@ jobs:
               print("")
               print(auth_url)
               print("")
-              print("بعد از زدن Allow، مرورگر به یک صفحه سفید (localhost:8080) می‌رود که باز نمی‌شود.")
-              print("کل آدرس بالای مرورگر (که تویش code= دارد) را کپی کنید و دوباره Run workflow را بزنید و در کادر پیست کنید!")
+              print("بعد از زدن Allow، آدرس صفحه سفید (localhost:8080) را کپی کنید و دوباره Run workflow را بزنید!")
               print("==========================================================")
           else:
               code = user_in
@@ -90,10 +93,10 @@ jobs:
                   "token_uri": "https://oauth2.googleapis.com/token",
                   "client_id": client_id,
                   "client_secret": client_secret,
-                  "scopes": [scope]
+                  "scopes": scopes
               }
               print("==========================================================")
-              print("✅ توکن دائمی جدید ساخته شد! خط زیر را کامل کپی کنید و در سکرت YOUTUBE_TOKEN قرار دهید:")
+              print("✅ توکن جدید با دسترسی کامل کامنت‌ها ساخته شد! خط زیر را در سکرت YOUTUBE_TOKEN قرار دهید:")
               print("")
               print(json.dumps(final_token))
               print("")
