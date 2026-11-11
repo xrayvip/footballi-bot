@@ -1,20 +1,23 @@
-name: Footballi Auto Uploader
+name: Footballi YouTube Bot & Comment Manager
 
 on:
   schedule:
+    # اجرا هر ۱۵ دقیقه یک‌بار
     - cron: '*/15 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # امکان اجرای دستی با یک دکمه در تب Actions
 
 concurrency:
-  group: footballi-uploader-group
+  group: footballi-bot-runner
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
-  upload:
+  run-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -23,41 +26,37 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install FFmpeg & Fast Dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: Install Fast Dependencies (Under 15s)
         run: |
-          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends ffmpeg
-          pip install -q requests beautifulsoup4 google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
 
-      - name: Restore Credentials
-        env:
-          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
-          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
-        run: |
-          echo "$CLIENT_SECRETS" > client_secrets.json
-          echo "$YOUTUBE_TOKEN" > token.json
-
-      - name: Run Uploader & Comment Manager Agents
+      - name: Run Footballi Uploader & Queue System
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
         run: |
           python -u footballi_uploader.py
+
+      - name: Run AI Comment Moderator & Responder
+        if: always() # حتی اگر آپلود ویدیو متوقف شد، کامنت‌ها مدیریت شوند
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ARVAN_API_KEY: ${{ secrets.ARVAN_API_KEY }}
+          CLIENT_SECRETS: ${{ secrets.CLIENT_SECRETS }}
+          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
+        run: |
           python -u comment_manager.py
 
-      - name: Save Upload History
+      - name: Save Queue & Channel State
+        if: always()
         run: |
-          git config user.name "Footballi Bot"
-          git config user.email "bot@footballi.net"
-          if [ -f uploaded_matches.json ]; then
-            cp uploaded_matches.json /tmp/uploaded_matches.json.bak
-            git fetch origin main
-            git reset --hard origin/main
-            cp /tmp/uploaded_matches.json.bak uploaded_matches.json
-            git add uploaded_matches.json
-            git diff --staged --quiet || git commit -m "Auto-update uploaded_matches.json"
-            git push --force origin main
-          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add uploaded_matches.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update video queue and indexed matches [skip ci]" && git push)
