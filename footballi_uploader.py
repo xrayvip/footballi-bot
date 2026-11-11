@@ -161,13 +161,20 @@ def save_history(history):
 
 
 def get_authenticated_service():
-    yt_scope = PROTO + "www.googleapis" + ".com/auth/youtube"
+    yt_scopes = [
+        PROTO + "www.googleapis" + ".com/auth/youtube",
+        PROTO + "www.googleapis" + ".com/auth/youtube.force-ssl"
+    ]
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, [yt_scope])
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            token_data = json.load(f)
+        scopes_to_use = token_data.get("scopes") or yt_scopes
+        creds = Credentials.from_authorized_user_info(token_data, scopes_to_use)
     elif os.environ.get("YOUTUBE_TOKEN"):
         token_data = json.loads(os.environ["YOUTUBE_TOKEN"])
-        creds = Credentials.from_authorized_user_info(token_data, [yt_scope])
+        scopes_to_use = token_data.get("scopes") or yt_scopes
+        creds = Credentials.from_authorized_user_info(token_data, scopes_to_use)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -176,6 +183,7 @@ def get_authenticated_service():
             raise RuntimeError("[ERROR] Valid YouTube token not found!")
 
     return build("youtube", "v3", credentials=creds)
+
 
 
 def get_channel_status_and_24h_count(youtube):
