@@ -34,7 +34,6 @@ import media_utils
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
@@ -75,7 +74,6 @@ def get_youtube_client():
     if not token_raw:
         raise RuntimeError("YOUTUBE_TOKEN secret is missing!")
     token_info = json.loads(token_raw)
-    # حذف اسکوپ‌های ذخیره‌شده از پیلود رفرش برای جلوگیری از خطای invalid_scope
     token_info.pop("scopes", None)
     token_info.pop("scope", None)
     creds = Credentials.from_authorized_user_info(token_info)
@@ -85,8 +83,6 @@ def get_youtube_client():
     return build("youtube", "v3", credentials=creds)
 
 
-
-# نام‌های معادل برای سازگاری با comment_manager.py در صورت ایمپورت
 load_history = load_state
 save_history = save_state
 get_authenticated_service = get_youtube_client
@@ -316,7 +312,6 @@ def organize_existing_channel_videos(youtube, channel_videos: list, playlists_ma
 
 
 def normalize_queue_item(item: dict) -> dict:
-    """حفظ سازگاری کامل با آیتم‌های قبلی موجود در صف"""
     if not isinstance(item, dict):
         return {}
     u = item.get("url") or item.get("page_url") or item.get("link") or ""
@@ -494,8 +489,18 @@ def main():
     inspect_fn = getattr(media_utils, "inspect_video_file", None)
     if inspect_fn:
         info = inspect_fn(video_file)
-        if info and info.get("is_vertical") and info.get("duration", 999) <= 175:
-            is_short = True
+        if isinstance(info, dict):
+            if info.get("is_vertical") and info.get("duration", 999) <= 175:
+                is_short = True
+        elif isinstance(info, (tuple, list)) and len(info) >= 2:
+            if isinstance(info[0], bool):
+                if info[0]:
+                    is_short = True
+            elif isinstance(info[0], (int, float)) and isinstance(info[1], (int, float)):
+                w, h = info[0], info[1]
+                dur = info[2] if len(info) >= 3 else 60
+                if h > w and dur <= 175:
+                    is_short = True
 
     thumb_to_use = None
     if not is_short:
