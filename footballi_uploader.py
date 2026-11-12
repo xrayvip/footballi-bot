@@ -38,6 +38,12 @@ SCOPES = [
 ]
 
 
+def get_tehran_reset_key() -> str:
+    """ریست روزانه سهمیه گوگل کلود هر روز ساعت ۱۱:۳۰ صبح تهران (۰۸:۰۰ UTC)"""
+    now_utc = datetime.now(timezone.utc)
+    return (now_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
 def load_state() -> dict:
     default_state = {
         "uploaded_urls": [],
@@ -46,6 +52,8 @@ def load_state() -> dict:
         "pending_queue": [],
         "daily_uploads": {"date": "", "count": 0},
         "last_upload_timestamp": 0,
+        "upload_limit_cooldown_until": 0,
+        "quota_exhausted_date": "",
         "last_apify_check": 0,
         "playlists": {},
         "playlist_assignments": {},
@@ -92,8 +100,8 @@ get_youtube_service = get_youtube_client
 def detect_primary_category(title: str, description: str = "", is_short: bool = False) -> str:
     if is_short:
         return "SHORTS"
-    # بررسی فقط روی عنوان ویدیو تا فوتر توضیحات باعث اشتباه نشود
-    norm_title = normalize_persian(title).lower()
+    clean_title = re.sub(r"\|.*$", "", title).strip()
+    norm_title = normalize_persian(clean_title).lower()
     for kw in SUMMARY_KEYWORDS:
         if normalize_persian(kw).lower() in norm_title:
             return "SUMMARY"
@@ -108,7 +116,6 @@ def detect_primary_category(title: str, description: str = "", is_short: bool = 
 
 def detect_all_matching_playlists(title: str, description: str = "", is_short: bool = False) -> list:
     matched = []
-    # حذف عبارات فوتر ثابت از عنوان برای تشخیص دقیق پلی‌لیست
     clean_title = re.sub(r"\|.*$", "", title).strip()
     norm_title = normalize_persian(clean_title).lower()
 
@@ -150,8 +157,12 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
     return matched
 
 
-
 def ensure_all_playlists(youtube, state: dict) -> dict:
+    playlists_state = state.get("playlists", {})
+    # اگر هر ۱۴ پلی‌لیست از قبل در فایل وضعیت ثبت شده‌اند، نیازی به مصرف سهمیه API نیست
+    if all(k in playlists_state and playlists_state[k] for k in PLAYLIST_DEFINITIONS):
+        return playlists_state
+
     existing_map = {}
     try:
         req = youtube.playlists().list(part="snippet", mine=True, maxResults=50)
@@ -161,13 +172,18 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
             pl_title = item["snippet"]["title"].strip()
             existing_map[pl_title] = pl_id
             existing_map[normalize_persian(pl_title)] = pl_id
+    except HttpError as e:
+        if "quotaExceeded" in str(e):
+            state["quota_exhausted_date"] = get_tehran_reset_key()
+        print(f"[PLAYLIST-WARN] Could not list channel playlists: {e}")
+        return playlists_state
     except Exception as e:
         print(f"[PLAYLIST-WARN] Could not list channel playlists: {e}")
-        return state.get("playlists", {})
-
-    playlists_state = state.get("playlists", {})
+        return playlists_state
 
     for key, pdef in PLAYLIST_DEFINITIONS.items():
+        if key in playlists_state and playlists_state[key]:
+            continue
         target_title = pdef["title"]
         target_desc = pdef["description"]
         legacy_titles = pdef.get("legacy_titles", [])
@@ -191,10 +207,7 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
                     part="snippet",
                     body={
                         "id": found_legacy_id,
-                        "snippet": {
-                            "title": target_title,
-                            "description": target_desc,
-                        },
+                        "snippet": {"title": target_title, "description": target_desc},
                     },
                 ).execute()
                 print(f"✨ [PLAYLIST-RENAME] Updated playlist title to: {target_title}")
@@ -206,10 +219,7 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
             created = youtube.playlists().insert(
                 part="snippet,status",
                 body={
-                    "snippet": {
-                        "title": target_title,
-                        "description": target_desc,
-                    },
+                    "snippet": {"title": target_title, "description": target_desc},
                     "status": {"privacyStatus": "public"},
                 },
             ).execute()
@@ -217,6 +227,7 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
             print(f"✅ [PLAYLIST-CREATED] Created new official playlist: {target_title}")
         except Exception as e:
             print(f"[PLAYLIST-WARN] Could not create playlist {target_title}: {e}")
+            break
 
     state["playlists"] = playlists_state
     return playlists_state
@@ -239,10 +250,7 @@ def add_video_to_playlists(youtube, video_id: str, playlist_keys: list, playlist
                 body={
                     "snippet": {
                         "playlistId": pl_id,
-                        "resourceId": {
-                            "kind": "youtube#video",
-                            "videoId": video_id,
-                        },
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id},
                     }
                 },
             ).execute()
@@ -252,6 +260,9 @@ def add_video_to_playlists(youtube, video_id: str, playlist_keys: list, playlist
         except HttpError as e:
             if e.resp.status == 409 or "videoAlreadyInPlaylist" in str(e):
                 already_assigned.add(key)
+            elif "quotaExceeded" in str(e):
+                state["quota_exhausted_date"] = get_tehran_reset_key()
+                break
             else:
                 print(f"[PLAYLIST-WARN] Could not add {video_id} to {key}: {e}")
         except Exception:
@@ -261,7 +272,7 @@ def add_video_to_playlists(youtube, video_id: str, playlist_keys: list, playlist
     return added_count
 
 
-def fetch_channel_existing_videos(youtube, max_items: int = 120) -> list:
+def fetch_channel_existing_videos(youtube, state: dict, max_items: int = 100) -> list:
     videos = []
     try:
         ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
@@ -288,17 +299,24 @@ def fetch_channel_existing_videos(youtube, max_items: int = 120) -> list:
             next_page = pl_res.get("nextPageToken")
             if not next_page:
                 break
+    except HttpError as e:
+        if "quotaExceeded" in str(e):
+            state["quota_exhausted_date"] = get_tehran_reset_key()
+            print("⏸️ [QUOTA-PAUSE] Google Cloud daily API quota (10,000 units) is full until 11:30 AM Tehran reset.")
+        else:
+            print(f"[WARN] Could not index channel videos: {e}")
     except Exception as e:
         print(f"[WARN] Could not index channel videos: {e}")
     return videos
 
 
-def organize_existing_channel_videos(youtube, channel_videos: list, playlists_map: dict, state: dict, max_ops_per_run: int = 10):
+def organize_existing_channel_videos(youtube, channel_videos: list, playlists_map: dict, state: dict, max_ops_per_run: int = 3):
+    """مرتب‌سازی تدریجی با سقف ۳ درج در هر اجرا برای حفظ کامل سهمیه روزانه API"""
     ops = 0
     assignments = state.setdefault("playlist_assignments", {})
 
     for vid in channel_videos:
-        if ops >= max_ops_per_run:
+        if ops >= max_ops_per_run or state.get("quota_exhausted_date") == get_tehran_reset_key():
             break
         vid_id = vid["video_id"]
         title = vid["title"]
@@ -310,7 +328,7 @@ def organize_existing_channel_videos(youtube, channel_videos: list, playlists_ma
         missing_keys = [k for k in target_keys if k not in current_keys]
 
         if missing_keys:
-            added = add_video_to_playlists(youtube, vid_id, missing_keys[:3], playlists_map, state)
+            added = add_video_to_playlists(youtube, vid_id, missing_keys[:2], playlists_map, state)
             ops += added
 
 
@@ -320,11 +338,15 @@ def normalize_queue_item(item: dict) -> dict:
     u = item.get("url") or item.get("page_url") or item.get("link") or ""
     mp4 = item.get("mp4_url") or item.get("video_url") or item.get("mp4") or ""
     title = item.get("title") or item.get("raw_title") or item.get("seo_title") or ""
+    # حذف پسوند اشتباه «| خلاصه بازی» اگر از قبل روی مصاحبه‌ها مانده باشد
+    title = re.sub(r"\s*\|\s*خلاصه بازی\s*$", "", title).strip()
     poster = item.get("poster_url") or item.get("poster") or item.get("thumbnail") or ""
+    is_short = bool(item.get("is_short", False))
     item["url"] = u
     item["mp4_url"] = mp4
     item["title"] = title
     item["poster_url"] = poster
+    item["category"] = detect_primary_category(title, "", is_short=is_short)
     return item
 
 
@@ -342,7 +364,7 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
 
         if not u or not mp4 or not t:
             continue
-        if is_foreign_or_blacklisted(item.get("title", ""), item.get("description", "")):
+        if is_foreign_or_blacklisted(item.get("title", ""), ""):
             continue
         if u in uploaded_urls or u in q_urls or mp4 in q_mp4s or t in q_titles or t in channel_norm_titles:
             continue
@@ -400,20 +422,50 @@ def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> d
 
 
 def main():
-    print("[START] Footballi Bot starting (Chrome Browser + 14 Multi-Playlist Edition)...")
+    print("[START] Footballi Bot starting (Quota-Safe Chrome + 14 Multi-Playlist Edition)...")
     state = load_state()
+    reset_key = get_tehran_reset_key()
 
-    now_utc = datetime.now(timezone.utc)
-    reset_key = (now_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
     if not isinstance(state.get("daily_uploads"), dict) or state["daily_uploads"].get("date") != reset_key:
         state["daily_uploads"] = {"date": reset_key, "count": 0}
+        state["upload_limit_cooldown_until"] = 0
+
+    uploaded_urls = set(state.get("uploaded_urls", []))
+    seen_mp4s = set(state.get("seen_mp4s", []))
+    channel_norm_titles = {normalize_persian(t).lower() for t in state.get("uploaded_titles", [])}
+
+    # ۱. اسکن سایت فوتبالی با مرورگر کروم (کاملاً رایگان و بدون مصرف سهمیه یوتیوب)
+    new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
+    for item in new_web_videos:
+        item["category"] = detect_primary_category(
+            item["title"], item.get("description", ""), item.get("is_short", False)
+        )
+        state["pending_queue"].append(item)
+
+    state["pending_queue"] = deduplicate_queue(
+        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
+    )
+    priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
+    state["pending_queue"].sort(key=lambda x: priority_order.get(x.get("category", "VIDEO"), 5))
+    save_state(state)
+
+    print(f"[QUEUE] {len(state['pending_queue'])} unique verified videos ready in Pending Queue.")
+
+    # ۲. بررسی اینکه آیا سهمیه ۱۰,۰۰۰ واحدی امروز گوگل کلود تمام شده است یا خیر
+    if state.get("quota_exhausted_date") == reset_key:
+        print("⏸️ [QUOTA-GUARD] Daily YouTube API quota is full for today. Holding queue safely until 11:30 AM Tehran reset.")
+        return
 
     youtube = get_youtube_client()
+    channel_videos = fetch_channel_existing_videos(youtube, state, max_items=100)
+    if state.get("quota_exhausted_date") == reset_key:
+        save_state(state)
+        return
 
-    channel_videos = fetch_channel_existing_videos(youtube, max_items=120)
-    channel_norm_titles = {normalize_persian(v["title"]).lower() for v in channel_videos}
+    for v in channel_videos:
+        channel_norm_titles.add(normalize_persian(v["title"]).lower())
+
     uploads_today = state["daily_uploads"].get("count", 0)
-
     print(
         f"[STATUS] Channel indexed titles: {len(channel_videos)} | "
         f"Uploads since 11:30 AM reset: {uploads_today}/{MAX_DAILY_UPLOADS} "
@@ -421,34 +473,18 @@ def main():
     )
 
     playlists_map = ensure_all_playlists(youtube, state)
-    organize_existing_channel_videos(youtube, channel_videos, playlists_map, state, max_ops_per_run=10)
-
-    uploaded_urls = set(state.get("uploaded_urls", []))
-    seen_mp4s = set(state.get("seen_mp4s", []))
-    state["pending_queue"] = deduplicate_queue(
-        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
-    )
-    print(f"[QUEUE] {len(state['pending_queue'])} unique verified videos ready in Pending Queue.")
-
-    new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
-    new_reels = fetch_instagram_reels(state)
-
-    for item in new_web_videos + new_reels:
-        item["category"] = detect_primary_category(
-            item["title"], item.get("description", ""), item.get("is_short", False)
-        )
-        state["pending_queue"].append(item)
-
-    state["pending_queue"] = deduplicate_queue(
-        state["pending_queue"], uploaded_urls, seen_mp4s, channel_norm_titles
-    )
-
-    priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
-    state["pending_queue"].sort(key=lambda x: priority_order.get(x.get("category", "VIDEO"), 5))
+    organize_existing_channel_videos(youtube, channel_videos, playlists_map, state, max_ops_per_run=3)
     save_state(state)
 
     if not state["pending_queue"]:
         print("[DONE] No videos in queue to upload right now.")
+        return
+
+    # ۳. بررسی کول‌داون ۳ ساعته در صورت پر بودن سقف آپلود ۲۴ ساعته کانال (جلوگیری از سوختن ۱۶۰۰ واحد در هر ۱۵ دقیقه!)
+    cooldown_until = float(state.get("upload_limit_cooldown_until", 0))
+    if time.time() < cooldown_until:
+        rem_min = (cooldown_until - time.time()) / 60.0
+        print(f"🛡️ [QUOTA-SHIELD] Channel 24h upload cap active. Pausing upload attempts for {rem_min:.0f}m to preserve API quota for comments.")
         return
 
     candidate = state["pending_queue"][0]
@@ -458,12 +494,10 @@ def main():
     if cat != "SUMMARY" and mins_since_last < MIN_MINUTES_BETWEEN_UPLOADS:
         wait_rem = MIN_MINUTES_BETWEEN_UPLOADS - mins_since_last
         print(f"⏳ [PACING] Waiting {wait_rem:.1f}m before next regular upload to maximize impressions.")
-        save_state(state)
         return
 
     if uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_SUMMARY_SLOTS) and cat != "SUMMARY":
         print("[QUOTA] Remaining daily slots are reserved strictly for Match Summaries.")
-        save_state(state)
         return
 
     video_file = "temp_video.mp4"
@@ -559,16 +593,22 @@ def main():
         state["uploaded_titles"].append(final_title)
         state["daily_uploads"]["count"] = uploads_today + 1
         state["last_upload_timestamp"] = time.time()
+        state["upload_limit_cooldown_until"] = 0
         save_state(state)
         print(f"[DONE] Uploaded: 1 | Unique videos waiting in Queue: {len(state['pending_queue'])}")
 
     except HttpError as e:
         err_str = str(e)
         print(f" YouTube API Upload error: {e}")
-        if "uploadLimitExceeded" in err_str or "quotaExceeded" in err_str:
-            print("💾 [QUEUE-SAVED] YouTube limit reached! Holding remaining unique videos in queue for next reset.")
+        if "uploadLimitExceeded" in err_str:
+            # قفل ۳ ساعته روی تلاش آپلود تا ۱۶۰۰ واحد سهمیه در هر ۱۵ دقیقه نسوزد!
+            state["upload_limit_cooldown_until"] = time.time() + (3 * 3600)
+            print("🛡️ [QUOTA-SHIELD] Channel 24h upload limit active! Pausing upload retries for 3 hours to save API quota.")
             save_state(state)
-            print(f"[DONE] Uploaded: 0 | Unique videos waiting in Queue: {len(state['pending_queue'])}")
+        elif "quotaExceeded" in err_str:
+            state["quota_exhausted_date"] = reset_key
+            print("⏸️ [QUOTA-GUARD] Daily API quota reached! Holding queue until 11:30 AM Tehran reset.")
+            save_state(state)
         else:
             state["pending_queue"].pop(0)
             save_state(state)
