@@ -46,23 +46,7 @@ jobs:
           pip install --quiet --disable-pip-version-check requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client playwright
           echo "✅ Setup completed in seconds! FFmpeg: $(which ffmpeg) | Chrome: $(which google-chrome)"
 
-          # بازیابی لیست کامنت‌های پاسخ‌داده‌شده از کامیت 754cdc3 در صورت خالی بودن تا پاسخ تکراری ارسال نشود
-          python -c '
-          import json, os, subprocess
-          p = "uploaded_matches.json"
-          if os.path.exists(p):
-              d = json.load(open(p, encoding="utf-8"))
-              if not d.get("processed_comments"):
-                  try:
-                      old_raw = subprocess.check_output(["git", "show", "754cdc3:uploaded_matches.json"], text=True)
-                      old_d = json.loads(old_raw)
-                      if old_d.get("processed_comments"):
-                          d["processed_comments"] = old_d["processed_comments"]
-                          json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-                          print(f"[RESTORE] Restored {len(d[\"processed_comments\"])} reviewed comment IDs from 754cdc3.")
-                  except Exception:
-                      pass
-          '
+          python -c 'import json, os, subprocess; p="uploaded_matches.json"; d=json.load(open(p,encoding="utf-8")) if os.path.exists(p) else {}; old_d=json.loads(subprocess.check_output(["git","show","754cdc3:uploaded_matches.json"],text=True)) if not d.get("processed_comments") else {}; c=len(old_d.get("processed_comments",[])); d["processed_comments"]=old_d["processed_comments"] if c else d.get("processed_comments",[]); json.dump(d,open(p,"w",encoding="utf-8"),ensure_ascii=False,indent=2) if c else None; print("[RESTORE] Restored", c, "comment IDs.") if c else None' || true
 
           echo ""
           echo "=== [2/4] Running Footballi Video Uploader & Queue ==="
