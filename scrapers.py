@@ -6,7 +6,7 @@ import time
 import shutil
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, unquote
+from urllib.parse import urljoin
 
 from config import HEADERS, ENTRY_URLS, FOREIGN_BLACKLIST, APIFY_COOLDOWN_HOURS
 
@@ -14,7 +14,7 @@ from config import HEADERS, ENTRY_URLS, FOREIGN_BLACKLIST, APIFY_COOLDOWN_HOURS
 def normalize_persian(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"[\u064B-\u065F\u0670]", "", text)  # حذف اعراب برای مقایسه دقیق
+    text = re.sub(r"[\u064B-\u065F\u0670]", "", text)
     text = text.replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ")
     return re.sub(r"\s+", " ", text).strip()
 
@@ -28,7 +28,6 @@ def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
 
 
 def find_system_chrome() -> str:
-    """پیدا کردن مرورگر کروم از قبل نصب‌شده روی سرور گیت‌هاب (نصب صفر ثانیه)"""
     candidates = [
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
@@ -44,11 +43,7 @@ def find_system_chrome() -> str:
     return ""
 
 
-def browser_discover_links(max_pages: int = 6) -> list:
-    """
-    باز کردن سایت فوتبالی با مرورگر واقعی بدون نیاز به دانلود کرومیوم،
-    اسکرول صفحه برای لود شدن کامل کامپوننت‌های انگولار و استخراج تمام لینک‌های ویدیو
-    """
+def browser_discover_links(max_pages: int = 8) -> list:
     discovered_urls = []
     seen = set()
     chrome_path = find_system_chrome()
@@ -83,7 +78,6 @@ def browser_discover_links(max_pages: int = 6) -> list:
             )
             page = context.new_page()
 
-            # شکار پاسخ‌های API داخلی فوتبالی هنگام لود و اسکرول صفحه
             def handle_response(response):
                 try:
                     if "footballi.net" in response.url and "json" in response.headers.get("content-type", ""):
@@ -102,9 +96,8 @@ def browser_discover_links(max_pages: int = 6) -> list:
             for url in ENTRY_URLS[:max_pages]:
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                    # اسکرول نرم برای فعال کردن Lazy-Load انگولار
-                    for _ in range(3):
-                        page.evaluate("window.scrollBy(0, 1200)")
+                    for _ in range(4):
+                        page.evaluate("window.scrollBy(0, 1400)")
                         page.wait_for_timeout(600)
 
                     anchors = page.eval_on_selector_all(
@@ -131,10 +124,6 @@ def browser_discover_links(max_pages: int = 6) -> list:
 
 
 def extract_video_page_details(page_url: str, session: requests.Session = None) -> dict:
-    """
-    استخراج دقیق فایل MP4، پوستر اصلی HD، عنوان، توضیحات و همچنین
-    لینک‌های باکس «ویدیوهای مرتبط» از داخل صفحه هر ویدیو
-    """
     m_id = re.search(r"/video/(\d+)", page_url)
     if not m_id:
         return None
@@ -151,7 +140,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # ۱. استخراج لینک‌های «ویدیوهای مرتبط» قبل از حذف سایدبارها برای گسترش کشف ویدیوها
     related_links = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
@@ -159,7 +147,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
         if rm and rm.group(1) != video_id:
             related_links.append(urljoin("https://footballi.net", rm.group(0)))
 
-    # ۲. استخراج عنوان دقیق ویدیو
     title = ""
     og_title = soup.find("meta", property="og:title")
     if og_title and og_title.get("content"):
@@ -168,29 +155,23 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
         title = soup.title.string.strip()
     title = re.sub(r"\s*[-|]\s*فوتبالی.*$", "", title).strip()
 
-    # ۳. استخراج پوستر رسمی HD
     poster_url = ""
     og_img = soup.find("meta", property="og:image")
     if og_img and og_img.get("content"):
         poster_url = og_img["content"].strip()
 
-    # ۴. استخراج توضیحات
     description = ""
     og_desc = soup.find("meta", property="og:description")
     if og_desc and og_desc.get("content"):
         description = og_desc["content"].strip()
 
-    # ۵. استخراج دقیق MP4 مربوط به همین شناسه ویدیو (جلوگیری از قاطی شدن با ویدیوی سایدبار)
     mp4_url = ""
-
-    # الف) تگ متا og:video
     for meta_prop in ["og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"]:
         m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
         if m_tag and m_tag.get("content") and ".mp4" in m_tag["content"]:
             mp4_url = m_tag["content"].strip()
             break
 
-    # ب) تگ <video> در بدنه اصلی (بعد از حذف سایدبار و فوتر)
     if not mp4_url:
         for tag in soup.find_all(["aside", "footer", "nav"]):
             tag.decompose()
@@ -205,7 +186,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
             if not poster_url and video_tag.get("poster"):
                 poster_url = video_tag["poster"].strip()
 
-    # ج) جستجو در TransferState JSON انگولار نزدیک به شناسه ویدیو
     if not mp4_url:
         idx = html.find(str(video_id))
         while idx != -1:
@@ -216,7 +196,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
                 break
             idx = html.find(str(video_id), idx + len(str(video_id)))
 
-    # د) فال‌بک به اولین MP4 معتبر در کل صفحه
     if not mp4_url:
         all_mp4s = re.findall(r"https?://[^\s\"\'<>\\]+\.mp4", html)
         if all_mp4s:
@@ -237,9 +216,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
 
 
 def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
-    """
-    ترکیب مرورگر کروم + خزشگر HTML + شکارچی «ویدیوهای مرتبط» برای کشف حداکثری ویدیوهای جدید
-    """
     uploaded_urls = set(state.get("uploaded_urls", []))
     seen_mp4s = set(state.get("seen_mp4s", []))
     queued_urls = {item.get("url") for item in state.get("pending_queue", []) if item.get("url")}
@@ -263,11 +239,9 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             seen_candidate_ids.add(vid_id)
             candidate_links.append(u)
 
-    # ۱. کشف لینک‌ها با مرورگر کروم
     for link in browser_discover_links():
         add_link(link)
 
-    # ۲. کشف مکمل با درخواست مستقیم از تمام هاب‌ها و تگ‌ها
     session = requests.Session()
     for hub_url in ENTRY_URLS:
         try:
@@ -284,7 +258,6 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
 
     results = []
     idx = 0
-    # اسکن صفحات ویدیو + اضافه کردن ویدیوهای مرتبط کشف‌شده در هر صفحه
     while idx < len(candidate_links) and len(results) < max_new_candidates:
         link = candidate_links[idx]
         idx += 1
@@ -293,7 +266,6 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
         if not details:
             continue
 
-        # اضافه کردن لینک‌های «ویدیوهای مرتبط» همان صفحه به صف بررسی!
         for rel_url in details.get("related_links", []):
             if len(candidate_links) < 80:
                 add_link(rel_url)
@@ -321,7 +293,6 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
 
 
 def fetch_instagram_reels(state: dict) -> list:
-    """دریافت ریلزهای اینستاگرام فوتبالی با رعایت کول‌داون ۸ ساعته برای رایگان ماندن Apify"""
     apify_token = os.environ.get("APIFY_TOKEN", "").strip()
     if not apify_token:
         return []
@@ -341,7 +312,7 @@ def fetch_instagram_reels(state: dict) -> list:
             "resultsLimit": 6,
         }
         print("[APIFY] Fetching latest Reels from @footballiapp...")
-        run = client.actor("apify/instagram-reel-scraper").call(run_input=run_input, timeout_secs=90)
+        run = client.actor("apify/instagram-reel-scraper").call(run_input=run_input)
         state["last_apify_check"] = time.time()
 
         uploaded_urls = set(state.get("uploaded_urls", []))
@@ -367,6 +338,7 @@ def fetch_instagram_reels(state: dict) -> list:
                 "source": "instagram",
                 "is_short": True,
             })
+        print(f"[APIFY] Added {len(reels)} fresh Reels from Instagram.")
         return reels
     except Exception as e:
         print(f"[APIFY-WARN] Instagram check skipped: {e}")
