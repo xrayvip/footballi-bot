@@ -75,10 +75,15 @@ def get_youtube_client():
     if not token_raw:
         raise RuntimeError("YOUTUBE_TOKEN secret is missing!")
     token_info = json.loads(token_raw)
-    creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+    # حذف اسکوپ‌های ذخیره‌شده از پیلود رفرش برای جلوگیری از خطای invalid_scope
+    token_info.pop("scopes", None)
+    token_info.pop("scope", None)
+    creds = Credentials.from_authorized_user_info(token_info)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
     return build("youtube", "v3", credentials=creds)
+
 
 
 # نام‌های معادل برای سازگاری با comment_manager.py در صورت ایمپورت
