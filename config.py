@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 
-PROTO = "https"
+PROTO = "https://"
 
 # نام فایل وضعیت (هر دو نام برای سازگاری کامل با همه ماژول‌ها)
 HISTORY_FILE = "uploaded_matches.json"
@@ -28,19 +28,21 @@ HEADERS = {
 
 # صفحات ورودی برای اسکن عمیق با مرورگر کروم و اسپایدر
 ENTRY_URLS = [
-    f"{PROTO}://footballi.net/video",
-    f"{PROTO}://footballi.net/news/video",
-    f"{PROTO}://footballi.net/news/tag/%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%A8%D8%B1%D8%AA%D8%B1",
-    f"{PROTO}://footballi.net/news/tag/%D8%B4%D8%A8-%D9%87%D8%A7%DB%8C-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84%DB%8C",
-    f"{PROTO}://footballi.net/team/1/%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84",
-    f"{PROTO}://footballi.net/team/2/%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
-    f"{PROTO}://footballi.net/team/3/%D8%B3%D9%BE%D8%A7%D9%87%D8%A7%D9%86",
-    f"{PROTO}://footballi.net/team/17/%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
+    f"{PROTO}footballi.net/video",
+    f"{PROTO}footballi.net/news/video",
+    f"{PROTO}footballi.net/news/tag/%D9%88%DB%8C%D8%AF%DB%8C%D9%88%DA%A9%D8%B3%D8%AA",
+    f"{PROTO}footballi.net/news/tag/%D9%BE%D8%B4%D8%AA-%D8%AE%D8%B7",
+    f"{PROTO}footballi.net/news/tag/%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%A8%D8%B1%D8%AA%D8%B1",
+    f"{PROTO}footballi.net/news/tag/%D8%B4%D8%A8-%D9%87%D8%A7%DB%8C-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84%DB%8C",
+    f"{PROTO}footballi.net/team/1/%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84",
+    f"{PROTO}footballi.net/team/2/%D9%BE%D8%B1%D8%B3%D9%8E%D9%BE%D9%88%D9%84%DB%8C%D8%B3".replace("%D9%8E", ""),
+    f"{PROTO}footballi.net/team/3/%D8%B3%D9%BE%D8%A7%D9%87%D8%A7%D9%86",
+    f"{PROTO}footballi.net/team/17/%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
 ]
 FOOTBALLI_URLS = ENTRY_URLS
 SEED_URLS = ENTRY_URLS
 
-# لیست سیاه کپی‌رایت (هر دو نام متغیر برای سازگاری با ai_seo.py و scrapers.py)
+# لیست سیاه کپی‌رایت
 FOREIGN_BLACKLIST = [
     "لالیگا", "لیگ برتر انگلیس", "سری آ", "بوندسلیگا", "لیگ قهرمانان اروپا",
     "لیگ نخبگان آسیا", "لیگ قهرمانان آسیا", "رئال مادرید", "بارسلونا",
@@ -161,9 +163,8 @@ PLAYLIST_NAMES = {k: v["title"] for k, v in PLAYLIST_DEFINITIONS.items()}
 
 
 def __getattr__(name: str):
-    """جلوگیری قطعی از ImportError اگر ماژولی دنبال متغیر دیگری در config گشت"""
     defaults = {
-        "ARVAN_BASE_URL": f"{PROTO}://ai.najafivip.ir/v1",
+        "ARVAN_BASE_URL": f"{PROTO}ai.najafivip.ir/v1",
         "DOMESTIC_WHITELIST": ["ایران", "لیگ برتر", "جام حذفی", "استقلال", "پرسپولیس", "سپاهان", "تراکتور"],
         "CHANNEL_TITLE": "Footballi - Football News & Media",
     }
