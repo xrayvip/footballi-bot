@@ -92,25 +92,27 @@ get_youtube_service = get_youtube_client
 def detect_primary_category(title: str, description: str = "", is_short: bool = False) -> str:
     if is_short:
         return "SHORTS"
-    norm = normalize_persian(f"{title} {description}").lower()
+    # بررسی فقط روی عنوان ویدیو تا فوتر توضیحات باعث اشتباه نشود
+    norm_title = normalize_persian(title).lower()
     for kw in SUMMARY_KEYWORDS:
-        if normalize_persian(kw).lower() in norm:
+        if normalize_persian(kw).lower() in norm_title:
             return "SUMMARY"
     for kw in VIDEOCAST_KEYWORDS:
-        if normalize_persian(kw).lower() in norm:
+        if normalize_persian(kw).lower() in norm_title:
             return "VIDEOCAST"
     for kw in POSHTE_KHAT_KEYWORDS:
-        if normalize_persian(kw).lower() in norm:
+        if normalize_persian(kw).lower() in norm_title:
             return "POSHTE_KHAT"
     return "VIDEO"
 
 
 def detect_all_matching_playlists(title: str, description: str = "", is_short: bool = False) -> list:
     matched = []
-    norm_title = normalize_persian(title).lower()
-    norm_full = normalize_persian(f"{title} {description}").lower()
+    # حذف عبارات فوتر ثابت از عنوان برای تشخیص دقیق پلی‌لیست
+    clean_title = re.sub(r"\|.*$", "", title).strip()
+    norm_title = normalize_persian(clean_title).lower()
 
-    if is_short or "#shorts" in norm_title:
+    if is_short or "#shorts" in normalize_persian(title).lower():
         matched.append("SHORTS")
 
     check_order = [
@@ -132,7 +134,7 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
         pdef = PLAYLIST_DEFINITIONS.get(key, {})
         for kw in pdef.get("keywords", []):
             norm_kw = normalize_persian(kw).lower()
-            if norm_kw in norm_title or norm_kw in norm_full[:280]:
+            if norm_kw in norm_title:
                 if key == "ESTEGHLAL" and "استقلال خوزستان" in norm_title:
                     rem = norm_title.replace("استقلال خوزستان", "")
                     if "استقلال" not in rem:
@@ -146,6 +148,7 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
             matched.append("INTERVIEW")
 
     return matched
+
 
 
 def ensure_all_playlists(youtube, state: dict) -> dict:
