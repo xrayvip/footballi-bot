@@ -1,489 +1,373 @@
-# scrapers.py
-# Autonomous AI Web-Browsing Agent (Playwright Chromium + Gemini Decision Engine)
+# -*- coding: utf-8 -*-
 import os
 import re
 import json
 import time
-from urllib.parse import urljoin, unquote
+import shutil
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin, unquote
 
-from config import (
-    PROTO, BASE_URL, VIDEO_LIST_URLS, HEADERS,
-    FORBIDDEN_KEYWORDS, SUMMARY_KEYWORDS,
-    APIFY_COOLDOWN_HOURS, MAX_REELS_PER_RUN
-)
-from ai_seo import sanitize_url, GOOGLE_API_BASE
-
-try:
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
+from config import HEADERS, ENTRY_URLS, FOREIGN_BLACKLIST, APIFY_COOLDOWN_HOURS
 
 
-def clean_scraped_title(raw_title):
-    if not raw_title:
-        return ""
-    t = re.sub(r"play_arrow\s*\d+:\d+", " ", raw_title, flags=re.IGNORECASE)
-    t = re.sub(r"(?:comment|visibility|remove_red_eye|videocam|play_circle)\s*[\d,]*", " ", t, flags=re.IGNORECASE)
-    t = re.sub(r"\b\d+:\d+\b", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-
-def normalize_persian(text):
+def normalize_persian(text: str) -> str:
     if not text:
         return ""
-    t = text.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("‌", " ")
-    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
-    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
-    for i in range(10):
-        t = t.replace(persian_digits[i], str(i)).replace(arabic_digits[i], str(i))
-    t = re.sub(r"#\S+", " ", t)
-    t = re.sub(r"[^\w\s]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip().lower()
-    return t
+    text = re.sub(r"[\u064B-\u065F\u0670]", "", text)  # حذف اعراب برای مقایسه دقیق
+    text = text.replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def is_match_summary(title):
-    t = normalize_persian(title)
-    return any(normalize_persian(k) in t for k in SUMMARY_KEYWORDS)
-
-
-def is_duplicate_title(candidate_title, existing_titles_set):
-    norm_cand = normalize_persian(candidate_title)
-    if not norm_cand or len(norm_cand) < 6:
-        return False
-
-    for ex in existing_titles_set:
-        norm_ex = normalize_persian(ex)
-        if not norm_ex:
-            continue
-        if norm_cand == norm_ex:
-            return True
-        if len(norm_cand) >= 16 and (norm_cand in norm_ex or norm_ex in norm_cand):
+def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
+    combined = normalize_persian(f"{title} {desc}").lower()
+    for word in FOREIGN_BLACKLIST:
+        if normalize_persian(word).lower() in combined:
             return True
     return False
 
 
-def is_safe_by_keywords(title, tags_text=""):
-    combined = normalize_persian(f"{title} {tags_text}")
-    for kw in FORBIDDEN_KEYWORDS:
-        if normalize_persian(kw) in combined:
-            return False
-    return True
+def find_system_chrome() -> str:
+    """پیدا کردن مرورگر کروم از قبل نصب‌شده روی سرور گیت‌هاب (نصب صفر ثانیه)"""
+    candidates = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        shutil.which("google-chrome"),
+        shutil.which("chromium-browser"),
+        shutil.which("chromium"),
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return ""
 
 
-def ai_agent_rank_and_select(raw_links, existing_titles):
+def browser_discover_links(max_pages: int = 6) -> list:
     """
-    The AI Editorial Brain:
-    Receives all discovered video links across Footballi.net, compares them against existing channel videos,
-    filters out any foreign/AFC copyrighted matches, and ranks the best domestic videos by YouTube viral potential.
+    باز کردن سایت فوتبالی با مرورگر واقعی بدون نیاز به دانلود کرومیوم،
+    اسکرول صفحه برای لود شدن کامل کامپوننت‌های انگولار و استخراج تمام لینک‌های ویدیو
     """
-    google_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not google_key or not raw_links:
-        return raw_links[:15]
+    discovered_urls = []
+    seen = set()
+    chrome_path = find_system_chrome()
 
-    prompt = f"""
-You are the Autonomous AI Chief Editor browsing 'footballi.net' for our official Iranian football YouTube channel.
-
-Below is a list of candidate videos currently on the website, and a list of recent titles already on our YouTube channel.
-
-YOUR EDITORIAL MISSION:
-1. EXCLUDE any video that is already on our channel (even if phrased slightly differently).
-2. EXCLUDE any foreign football (LaLiga, Premier League, Serie A, Bundesliga, Champions League, Arab leagues, etc.) or AFC Asian Champions League matches (even if Iranian teams play).
-3. SELECT ONLY safe Iranian domestic football content (Persian Gulf Pro League, Hazfi Cup, Azadegan League, Iran National Team, domestic club/coach/player interviews & controversies).
-4. PRIORITIZE & RANK the selected videos from #1 (highest priority) to last:
-   - Priority 1: Full Domestic Match Summaries ("خلاصه بازی...") -> set "is_summary": true
-   - Priority 2: High-engagement domestic controversies, coach press conferences, Esteghlal/Persepolis/Tractor/Sepahan exclusive videos -> set "is_summary": false
-
-Return ONLY a valid JSON array in exact priority order (max 12 best items):
-[
-  {{
-    "url": "https://footballi.net/video/...",
-    "title": "...",
-    "is_summary": true,
-    "priority_score": 98,
-    "editorial_note": "Full domestic match summary"
-  }}
-]
-
-Already on YouTube Channel (DO NOT pick these):
-{json.dumps(list(existing_titles)[:40], ensure_ascii=False)}
-
-Candidate Videos Found on Website:
-{json.dumps(raw_links[:60], ensure_ascii=False)}
-"""
-
-    models = ["models/gemini-flash-lite-latest", "models/gemini-2.0-flash"]
-    for m in models:
-        try:
-            url = f"{GOOGLE_API_BASE}/{m}:generateContent"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.15, "responseMimeType": "application/json"}
-            }
-            r = requests.post(url, params={"key": google_key}, json=payload, timeout=45)
-            if r.status_code == 200:
-                txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if txt.startswith("```"):
-                    txt = re.sub(r"^```(?:json)?|```$", "", txt, flags=re.MULTILINE).strip()
-                selected = json.loads(txt)
-                out = []
-                for item in selected:
-                    if item.get("url") and item.get("title"):
-                        out.append({
-                            "url": sanitize_url(item["url"]),
-                            "title": item["title"],
-                            "source": "web",
-                            "is_short": False,
-                            "is_summary": bool(item.get("is_summary", False))
-                        })
-                print(f"[AI-AGENT] Browsed {len(raw_links)} links -> Selected & prioritized {len(out)} best domestic videos.")
-                return out
-        except Exception as e:
-            print(f"[WARN] AI Agent ranking note ({m}): {e}")
-
-    return raw_links[:15]
-
-
-def scrape_website_candidates(history, existing_titles, save_history_fn):
-    """
-    Uses a real headless Chromium browser (Playwright) to navigate Footballi.net like a human editor,
-    rendering dynamic Angular components, collecting all video links, and handing them to the AI Editor.
-    """
-    permanently_done_urls = set(history.get("uploaded_urls", []))
-    discovered_map = {}
-
-    if PLAYWRIGHT_AVAILABLE:
-        print("[AI-BROWSER] Launching real headless Chromium browser to explore footballi.net...")
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent=HEADERS["User-Agent"],
-                    locale="fa-IR",
-                    viewport={"width": 1440, "height": 900}
-                )
-                page = context.new_page()
-
-                # Browse key hubs with real JavaScript execution
-                hubs_to_visit = [
-                    BASE_URL + "/video",
-                    BASE_URL + "/news/video",
-                    BASE_URL,
-                    BASE_URL + "/team/830",  # Esteghlal
-                    BASE_URL + "/team/829",  # Persepolis
-                    BASE_URL + "/team/833",  # Sepahan
-                    BASE_URL + "/team/836",  # Tractor
-                ]
-
-                for hub_url in hubs_to_visit:
-                    try:
-                        page.goto(hub_url, wait_until="domcontentloaded", timeout=25000)
-                        page.wait_for_timeout(2000)
-                        # Scroll down once to trigger lazy-loaded Angular video cards
-                        page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-                        page.wait_for_timeout(1000)
-
-                        # Extract all rendered /video/<id> links directly from the live DOM
-                        links_data = page.evaluate("""() => {
-                            const items = [];
-                            document.querySelectorAll('a[href*="/video/"]').forEach(a => {
-                                const href = a.href;
-                                const title = a.getAttribute('title') || a.innerText || '';
-                                if (href && title) {
-                                    items.push({url: href, title: title});
-                                }
-                            });
-                            return items;
-                        }""")
-
-                        for entry in links_data:
-                            u = sanitize_url(entry["url"].split("?")[0].rstrip("/"))
-                            m_id = re.search(r"/video/(\d+)", u)
-                            if not m_id:
-                                continue
-                            vid_id = m_id.group(1)
-                            canon = f"{BASE_URL}/video/{vid_id}"
-                            if canon in permanently_done_urls or u in permanently_done_urls or canon in discovered_map:
-                                continue
-
-                            clean_t = clean_scraped_title(entry["title"])
-                            if len(clean_t) < 6:
-                                continue
-                            if is_duplicate_title(clean_t, existing_titles):
-                                continue
-                            if not is_safe_by_keywords(clean_t):
-                                permanently_done_urls.add(canon)
-                                history["uploaded_urls"].append(canon)
-                                continue
-
-                            discovered_map[canon] = {
-                                "url": u,
-                                "canonical_id": vid_id,
-                                "title": clean_t,
-                                "source": "web",
-                                "is_short": False,
-                                "is_summary": is_match_summary(clean_t)
-                            }
-                    except Exception as e:
-                        print(f"[AI-BROWSER] Hub navigation note on {hub_url}: {e}")
-
-                browser.close()
-        except Exception as e:
-            print(f"[WARN] Playwright browser fallback triggered: {e}")
-
-    # Fallback / Supplement with fast HTTP scan if Playwright was not installed yet
-    if not discovered_map:
-        for raw_page_url in VIDEO_LIST_URLS:
-            page_url = sanitize_url(raw_page_url)
-            try:
-                resp = requests.get(page_url, headers=HEADERS, timeout=18)
-                if resp.status_code != 200:
-                    continue
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.find_all("a", href=True):
-                    m_id = re.search(r"/video/(\d+)", a["href"])
-                    if not m_id:
-                        continue
-                    vid_id = m_id.group(1)
-                    canon = f"{BASE_URL}/video/{vid_id}"
-                    full_u = sanitize_url(urljoin(BASE_URL, a["href"]).split("?")[0].rstrip("/"))
-                    if canon in permanently_done_urls or full_u in permanently_done_urls or canon in discovered_map:
-                        continue
-                    clean_t = clean_scraped_title(a.get("title") or a.get_text(" ", strip=True))
-                    if len(clean_t) < 6 or is_duplicate_title(clean_t, existing_titles):
-                        continue
-                    if not is_safe_by_keywords(clean_t):
-                        permanently_done_urls.add(canon)
-                        history["uploaded_urls"].append(canon)
-                        continue
-                    discovered_map[canon] = {
-                        "url": full_u,
-                        "canonical_id": vid_id,
-                        "title": clean_t,
-                        "source": "web",
-                        "is_short": False,
-                        "is_summary": is_match_summary(clean_t)
-                    }
-            except Exception:
-                pass
-
-    save_history_fn(history)
-    all_raw = list(discovered_map.values())
-    if not all_raw:
+    if not chrome_path:
+        print("[BROWSER] System Chrome not found, using fast SSR + API spider.")
         return []
 
-    # Let the AI Editorial Agent rank, filter, and prioritize the discovered videos
-    return ai_agent_rank_and_select(all_raw, existing_titles)
-
-
-def extract_video_details_from_page(page_url):
-    """
-    Uses the real headless browser to open the exact video page, wait for the main <video> player
-    to load its active .mp4 source, and verify the H1 title—100% immune to sidebar mixups!
-    """
-    clean_page_url = sanitize_url(page_url)
-    id_match = re.search(r"/video/(\d+)", clean_page_url)
-    if not id_match:
-        return None
-    target_vid_id = id_match.group(1)
-
-    if PLAYWRIGHT_AVAILABLE:
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(user_agent=HEADERS["User-Agent"], locale="fa-IR")
-                page = context.new_page()
-
-                captured_mp4s = []
-                # Sniff real network requests for .mp4 streams initiated by the video player
-                page.on(
-                    "request",
-                    lambda req: captured_mp4s.append(req.url) if ".mp4" in req.url.lower() else None
-                )
-
-                page.goto(clean_page_url, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(2500)
-
-                data = page.evaluate("""() => {
-                    const h1 = document.querySelector('h1');
-                    const vid = document.querySelector('main video, article video, video');
-                    const src = vid ? (vid.currentSrc || vid.src || (vid.querySelector('source') ? vid.querySelector('source').src : '')) : '';
-                    const poster = vid ? vid.poster : '';
-                    const ogImg = document.querySelector('meta[property="og:image"]');
-                    const tags = Array.from(document.querySelectorAll('a[href*="/tag/"]')).map(el => el.innerText).slice(0, 12).join(' ');
-                    return {
-                        title: h1 ? h1.innerText : '',
-                        videoSrc: src,
-                        poster: poster || (ogImg ? ogImg.content : ''),
-                        tags: tags
-                    };
-                }""")
-
-                browser.close()
-
-                title = clean_scraped_title(data.get("title", ""))
-                tags_text = data.get("tags", "")
-                if not title:
-                    return None
-
-                if not is_safe_by_keywords(title, tags_text):
-                    return {"rejected_forever": True}
-
-                mp4_url = data.get("videoSrc") or (captured_mp4s[0] if captured_mp4s else None)
-                if mp4_url and ".mp4" in mp4_url:
-                    return {
-                        "mp4_url": sanitize_url(mp4_url),
-                        "title": title,
-                        "tags_text": tags_text,
-                        "thumb_url": sanitize_url(data.get("poster")) if data.get("poster") else None
-                    }
-        except Exception as e:
-            print(f"[INFO] Browser player inspection fallback on {clean_page_url}: {e}")
-
-    # Fallback: Target-ID Window Extraction in static HTML
     try:
-        resp = requests.get(clean_page_url, headers=HEADERS, timeout=20)
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[BROWSER] Playwright library not installed, skipping browser step.")
+        return []
+
+    print(f"[AI-BROWSER] Launching pre-installed System Chrome ({chrome_path}) to render footballi.net...")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                executable_path=chrome_path,
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+            context = browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                viewport={"width": 1366, "height": 900},
+                locale="fa-IR",
+            )
+            page = context.new_page()
+
+            # شکار پاسخ‌های API داخلی فوتبالی هنگام لود و اسکرول صفحه
+            def handle_response(response):
+                try:
+                    if "footballi.net" in response.url and "json" in response.headers.get("content-type", ""):
+                        text = response.text()
+                        for m in re.finditer(r"/video/(\d+)(?:/[^\s\"\'<>\\]*)?", text):
+                            full_u = urljoin("https://footballi.net", m.group(0))
+                            vid_id = m.group(1)
+                            if vid_id not in seen:
+                                seen.add(vid_id)
+                                discovered_urls.append(full_u)
+                except Exception:
+                    pass
+
+            page.on("response", handle_response)
+
+            for url in ENTRY_URLS[:max_pages]:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    # اسکرول نرم برای فعال کردن Lazy-Load انگولار
+                    for _ in range(3):
+                        page.evaluate("window.scrollBy(0, 1200)")
+                        page.wait_for_timeout(600)
+
+                    anchors = page.eval_on_selector_all(
+                        "a[href*='/video/']",
+                        "elements => elements.map(el => ({href: el.href, text: (el.innerText || el.title || '').trim()}))",
+                    )
+                    for item in anchors:
+                        href = item.get("href", "")
+                        m = re.search(r"https?://(?:www\.)?footballi\.net/video/(\d+)(?:/[^\s\"\'<>?#]*)?", href)
+                        if m:
+                            vid_id = m.group(1)
+                            if vid_id not in seen:
+                                seen.add(vid_id)
+                                discovered_urls.append(href.split("?")[0])
+                except Exception as e:
+                    print(f"[BROWSER-WARN] Timeout/skip on {url}: {e}")
+
+            browser.close()
+    except Exception as e:
+        print(f"[BROWSER-WARN] Headless Chrome scan note: {e}")
+
+    print(f"[AI-BROWSER] Browser rendered & discovered {len(discovered_urls)} unique video links.")
+    return discovered_urls
+
+
+def extract_video_page_details(page_url: str, session: requests.Session = None) -> dict:
+    """
+    استخراج دقیق فایل MP4، پوستر اصلی HD، عنوان، توضیحات و همچنین
+    لینک‌های باکس «ویدیوهای مرتبط» از داخل صفحه هر ویدیو
+    """
+    m_id = re.search(r"/video/(\d+)", page_url)
+    if not m_id:
+        return None
+    video_id = m_id.group(1)
+
+    req = session or requests
+    try:
+        resp = req.get(page_url, headers=HEADERS, timeout=12)
         if resp.status_code != 200:
             return None
         html = resp.text
-        soup = BeautifulSoup(html, "html.parser")
-        h1 = soup.find("h1")
-        page_title = clean_scraped_title(h1.get_text(" ", strip=True)) if h1 else ""
-        if not page_title:
-            return None
-
-        tags_list = [t.get_text(strip=True) for t in soup.select("a[href*='/tag/']")][:15]
-        tags_text = " ".join(tags_list)
-        if not is_safe_by_keywords(page_title, tags_text):
-            return {"rejected_forever": True}
-
-        unescaped = html.replace("\\/", "/")
-        mp4_url = None
-        for m in re.finditer(rf"\b{target_vid_id}\b", unescaped):
-            pos = m.start()
-            window = unescaped[max(0, pos - 1200): min(len(unescaped), pos + 2000)]
-            matches = re.findall(r'https?://[^\s"\'<>\\]+\.mp4', window)
-            if matches:
-                mp4_url = matches[0]
-                break
-
-        if not mp4_url:
-            return None
-
-        og_img = soup.find("meta", property="og:image")
-        thumb_url = og_img.get("content") if og_img else None
-        return {
-            "mp4_url": sanitize_url(mp4_url),
-            "title": page_title,
-            "tags_text": tags_text,
-            "thumb_url": sanitize_url(thumb_url) if thumb_url else None
-        }
     except Exception:
         return None
 
+    soup = BeautifulSoup(html, "html.parser")
 
-def extract_clean_apify_token(raw_token):
-    if not raw_token:
-        return ""
-    t = raw_token.strip()
-    m = re.search(r"(apify_api_[A-Za-z0-9]+)", t)
-    if m:
-        return m.group(1)
-    if "token=" in t:
-        return t.split("token=")[-1].split("&")[0].strip()
-    return t
+    # ۱. استخراج لینک‌های «ویدیوهای مرتبط» قبل از حذف سایدبارها برای گسترش کشف ویدیوها
+    related_links = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        rm = re.search(r"/video/(\d+)(?:/[^\s\"\'<>?#]*)?", href)
+        if rm and rm.group(1) != video_id:
+            related_links.append(urljoin("https://footballi.net", rm.group(0)))
+
+    # ۲. استخراج عنوان دقیق ویدیو
+    title = ""
+    og_title = soup.find("meta", property="og:title")
+    if og_title and og_title.get("content"):
+        title = og_title["content"].strip()
+    if not title and soup.title and soup.title.string:
+        title = soup.title.string.strip()
+    title = re.sub(r"\s*[-|]\s*فوتبالی.*$", "", title).strip()
+
+    # ۳. استخراج پوستر رسمی HD
+    poster_url = ""
+    og_img = soup.find("meta", property="og:image")
+    if og_img and og_img.get("content"):
+        poster_url = og_img["content"].strip()
+
+    # ۴. استخراج توضیحات
+    description = ""
+    og_desc = soup.find("meta", property="og:description")
+    if og_desc and og_desc.get("content"):
+        description = og_desc["content"].strip()
+
+    # ۵. استخراج دقیق MP4 مربوط به همین شناسه ویدیو (جلوگیری از قاطی شدن با ویدیوی سایدبار)
+    mp4_url = ""
+
+    # الف) تگ متا og:video
+    for meta_prop in ["og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"]:
+        m_tag = soup.find("meta", property=meta_prop) or soup.find("meta", attrs={"name": meta_prop})
+        if m_tag and m_tag.get("content") and ".mp4" in m_tag["content"]:
+            mp4_url = m_tag["content"].strip()
+            break
+
+    # ب) تگ <video> در بدنه اصلی (بعد از حذف سایدبار و فوتر)
+    if not mp4_url:
+        for tag in soup.find_all(["aside", "footer", "nav"]):
+            tag.decompose()
+        video_tag = soup.find("video")
+        if video_tag:
+            if video_tag.get("src") and ".mp4" in video_tag["src"]:
+                mp4_url = video_tag["src"].strip()
+            else:
+                src_tag = video_tag.find("source")
+                if src_tag and src_tag.get("src") and ".mp4" in src_tag["src"]:
+                    mp4_url = src_tag["src"].strip()
+            if not poster_url and video_tag.get("poster"):
+                poster_url = video_tag["poster"].strip()
+
+    # ج) جستجو در TransferState JSON انگولار نزدیک به شناسه ویدیو
+    if not mp4_url:
+        idx = html.find(str(video_id))
+        while idx != -1:
+            window = html[max(0, idx - 1500) : min(len(html), idx + 2500)]
+            mp4_matches = re.findall(r"https?://[^\s\"\'<>\\]+\.mp4", window)
+            if mp4_matches:
+                mp4_url = mp4_matches[0]
+                break
+            idx = html.find(str(video_id), idx + len(str(video_id)))
+
+    # د) فال‌بک به اولین MP4 معتبر در کل صفحه
+    if not mp4_url:
+        all_mp4s = re.findall(r"https?://[^\s\"\'<>\\]+\.mp4", html)
+        if all_mp4s:
+            mp4_url = all_mp4s[0]
+
+    if not mp4_url or not title:
+        return None
+
+    return {
+        "video_id": video_id,
+        "url": page_url,
+        "title": title,
+        "description": description or title,
+        "mp4_url": mp4_url,
+        "poster_url": poster_url,
+        "related_links": related_links[:12],
+    }
 
 
-def pick_best_instagram_video_url(item):
-    versions = item.get("videoVersions") or item.get("video_versions") or []
-    if isinstance(versions, list) and versions:
-        best = max(
-            versions,
-            key=lambda v: int(v.get("width", 0)) * int(v.get("height", 0))
-        )
-        if best.get("url"):
-            return sanitize_url(best["url"])
-    return sanitize_url(item.get("videoUrl") or item.get("video_url") or "")
+def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
+    """
+    ترکیب مرورگر کروم + خزشگر HTML + شکارچی «ویدیوهای مرتبط» برای کشف حداکثری ویدیوهای جدید
+    """
+    uploaded_urls = set(state.get("uploaded_urls", []))
+    seen_mp4s = set(state.get("seen_mp4s", []))
+    queued_urls = {item.get("url") for item in state.get("pending_queue", []) if item.get("url")}
+    queued_mp4s = {item.get("mp4_url") for item in state.get("pending_queue", []) if item.get("mp4_url")}
+
+    known_ids = set()
+    for u in uploaded_urls | queued_urls:
+        m = re.search(r"/video/(\d+)", str(u))
+        if m:
+            known_ids.add(m.group(1))
+
+    candidate_links = []
+    seen_candidate_ids = set()
+
+    def add_link(u: str):
+        m = re.search(r"/video/(\d+)", u)
+        if not m:
+            return
+        vid_id = m.group(1)
+        if vid_id not in known_ids and vid_id not in seen_candidate_ids:
+            seen_candidate_ids.add(vid_id)
+            candidate_links.append(u)
+
+    # ۱. کشف لینک‌ها با مرورگر کروم
+    for link in browser_discover_links():
+        add_link(link)
+
+    # ۲. کشف مکمل با درخواست مستقیم از تمام هاب‌ها و تگ‌ها
+    session = requests.Session()
+    for hub_url in ENTRY_URLS:
+        try:
+            r = session.get(hub_url, headers=HEADERS, timeout=10)
+            if r.status_code == 200:
+                for m in re.finditer(r"https?://(?:www\.)?footballi\.net/video/(\d+)(?:/[^\s\"\'<>?#\\]*)?", r.text):
+                    add_link(m.group(0))
+                for m in re.finditer(r"\"/video/(\d+)(?:/[^\s\"\'<>?#\\]*)?\"", r.text):
+                    add_link(urljoin("https://footballi.net", m.group(0).strip('"')))
+        except Exception:
+            continue
+
+    print(f"[CRAWLER] Found {len(candidate_links)} fresh candidate video pages to inspect.")
+
+    results = []
+    idx = 0
+    # اسکن صفحات ویدیو + اضافه کردن ویدیوهای مرتبط کشف‌شده در هر صفحه
+    while idx < len(candidate_links) and len(results) < max_new_candidates:
+        link = candidate_links[idx]
+        idx += 1
+
+        details = extract_video_page_details(link, session=session)
+        if not details:
+            continue
+
+        # اضافه کردن لینک‌های «ویدیوهای مرتبط» همان صفحه به صف بررسی!
+        for rel_url in details.get("related_links", []):
+            if len(candidate_links) < 80:
+                add_link(rel_url)
+
+        if details["mp4_url"] in seen_mp4s or details["mp4_url"] in queued_mp4s:
+            continue
+
+        if is_foreign_or_blacklisted(details["title"], details["description"]):
+            print(f"🚫 [SKIP-FOREIGN] Rejecting foreign/blacklisted video: {details['title']}")
+            continue
+
+        seen_mp4s.add(details["mp4_url"])
+        results.append({
+            "url": details["url"],
+            "title": details["title"],
+            "description": details["description"],
+            "mp4_url": details["mp4_url"],
+            "poster_url": details["poster_url"],
+            "source": "footballi_web",
+            "is_short": False,
+        })
+
+    print(f"[CRAWLER] Verified {len(results)} brand-new domestic videos from Footballi.net!")
+    return results
 
 
-def fetch_instagram_reels(history, existing_titles, save_history_fn):
-    raw_token = os.environ.get("APIFY_TOKEN", "")
-    apify_token = extract_clean_apify_token(raw_token)
+def fetch_instagram_reels(state: dict) -> list:
+    """دریافت ریلزهای اینستاگرام فوتبالی با رعایت کول‌داون ۸ ساعته برای رایگان ماندن Apify"""
+    apify_token = os.environ.get("APIFY_TOKEN", "").strip()
     if not apify_token:
         return []
 
-    last_run = history.get("last_apify_run", 0)
-    hours_passed = (time.time() - last_run) / 3600.0
-    if hours_passed < APIFY_COOLDOWN_HOURS:
-        rem = APIFY_COOLDOWN_HOURS - hours_passed
+    last_check = float(state.get("last_apify_check", 0))
+    elapsed_hours = (time.time() - last_check) / 3600.0
+    if elapsed_hours < APIFY_COOLDOWN_HOURS:
+        rem = APIFY_COOLDOWN_HOURS - elapsed_hours
         print(f"[APIFY] Cooldown active ({rem:.1f}h remaining before next Instagram check).")
         return []
 
-    print("[APIFY] Fetching latest Instagram Reels from @footballiapp...")
-    apify_host = "api." + "apify" + ".com"
-    api_url = sanitize_url(PROTO + apify_host + "/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items")
-    payload = {
-        "username": ["footballiapp"],
-        "resultsLimit": 6
-    }
-
     try:
-        resp = requests.post(
-            api_url,
-            params={"token": apify_token},
-            json=payload,
-            timeout=90
-        )
-        history["last_apify_run"] = time.time()
-        save_history_fn(history)
+        from apify_client import ApifyClient
+        client = ApifyClient(apify_token)
+        run_input = {
+            "username": ["footballiapp"],
+            "resultsLimit": 6,
+        }
+        print("[APIFY] Fetching latest Reels from @footballiapp...")
+        run = client.actor("apify/instagram-reel-scraper").call(run_input=run_input, timeout_secs=90)
+        state["last_apify_check"] = time.time()
 
-        if resp.status_code not in (200, 201):
-            print(f"[WARN] Apify returned HTTP {resp.status_code}")
-            return []
+        uploaded_urls = set(state.get("uploaded_urls", []))
+        seen_mp4s = set(state.get("seen_mp4s", []))
+        queued_urls = {item.get("url") for item in state.get("pending_queue", []) if item.get("url")}
 
-        items = resp.json()
         reels = []
-        seen_urls = set(history.get("uploaded_urls", []))
-
-        for item in items:
-            video_url = pick_best_instagram_video_url(item)
-            short_code = item.get("shortCode") or item.get("id") or video_url
-            caption = item.get("caption") or ""
-            first_line = clean_scraped_title(caption.splitlines()[0]) if caption else "ویدیوی کوتاه فوتبالی"
-
-            unique_id = f"ig_{short_code}"
-            if not video_url or unique_id in seen_urls:
+        for item in client.dataset(run["defaultDatasetId"]).iterate_items():
+            reel_url = item.get("url") or f"https://www.instagram.com/p/{item.get('shortCode')}/"
+            video_url = item.get("videoUrl")
+            caption = (item.get("caption") or "").strip()
+            if not video_url or reel_url in uploaded_urls or reel_url in queued_urls or video_url in seen_mp4s:
                 continue
-
-            if is_duplicate_title(first_line, existing_titles):
-                seen_urls.add(unique_id)
-                history["uploaded_urls"].append(unique_id)
+            first_line = caption.split("\n")[0].strip() if caption else "ویدیوی کوتاه فوتبالی"
+            if is_foreign_or_blacklisted(first_line, caption):
                 continue
-
-            if not is_safe_by_keywords(first_line, caption):
-                seen_urls.add(unique_id)
-                history["uploaded_urls"].append(unique_id)
-                continue
-
             reels.append({
-                "url": unique_id,
+                "url": reel_url,
+                "title": first_line[:95],
+                "description": caption,
                 "mp4_url": video_url,
-                "title": first_line[:90],
-                "tags": caption[:200],
+                "poster_url": item.get("displayUrl", ""),
                 "source": "instagram",
                 "is_short": True,
-                "is_summary": False
             })
-            if len(reels) >= MAX_REELS_PER_RUN:
-                break
-
-        save_history_fn(history)
-        print(f"[APIFY] Found {len(reels)} new candidate Reels.")
         return reels
     except Exception as e:
-        print(f"[WARN] Failed fetching Instagram Reels: {e}")
+        print(f"[APIFY-WARN] Instagram check skipped: {e}")
         return []
