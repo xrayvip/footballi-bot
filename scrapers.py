@@ -20,11 +20,23 @@ def normalize_persian(text: str) -> str:
 
 
 def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
-    combined = normalize_persian(f"{title} {desc}").lower()
+    norm_title = normalize_persian(title).lower()
+
+    # برنامه‌های اختصاصی و گفتگو محور فوتبالی (ویدیوکست، پشت خط، مصاحبه و داوری) تصویر بازی خارجی ندارند و همیشه مجازند
+    safe_talk_keywords = [
+        "ویدیوکست", "ویدیو کست", "پشت خط", "کارشناسی داوری",
+        "مصاحبه", "نشست خبری", "صحبت های", "گفت و گو", "فوتبال برتر", "شب های فوتبالی"
+    ]
+    for skw in safe_talk_keywords:
+        if normalize_persian(skw).lower() in norm_title:
+            return False
+
+    # بررسی لیست سیاه فقط روی عنوان ویدیو (نه توضیحات عمومی سایت)
     for word in FOREIGN_BLACKLIST:
-        if normalize_persian(word).lower() in combined:
+        if normalize_persian(word).lower() in norm_title:
             return True
     return False
+
 
 
 def find_system_chrome() -> str:
