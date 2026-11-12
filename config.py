@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 import os
 
+PROTO = "https"
+
+# نام فایل وضعیت (هر دو نام برای سازگاری کامل با همه ماژول‌ها)
+HISTORY_FILE = "uploaded_matches.json"
+STATE_FILE = "uploaded_matches.json"
+
 # تنظیمات سهمیه و زمان‌بندی هوشمند آپلود
 MAX_DAILY_UPLOADS = 30
 RESERVED_SUMMARY_SLOTS = 5
+RESERVED_FOR_SUMMARIES = 5
 MAX_UPLOADS_PER_RUN = 1
 MIN_MINUTES_BETWEEN_UPLOADS = 45
 APIFY_COOLDOWN_HOURS = 8.0
-
-STATE_FILE = "uploaded_matches.json"
+INSTAGRAM_COOLDOWN_HOURS = 8.0
 
 HEADERS = {
     "User-Agent": (
@@ -20,19 +26,21 @@ HEADERS = {
     "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-# صفحات ورودی برای اسکن عمیق با مرورگر و اسپایدر
+# صفحات ورودی برای اسکن عمیق با مرورگر کروم و اسپایدر
 ENTRY_URLS = [
-    "https://footballi.net/video",
-    "https://footballi.net/news/video",
-    "https://footballi.net/news/tag/%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%A8%D8%B1%D8%AA%D8%B1",
-    "https://footballi.net/news/tag/%D8%B4%D8%A8-%D9%87%D8%A7%DB%8C-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84%DB%8C",
-    "https://footballi.net/team/1/%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84",
-    "https://footballi.net/team/2/%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
-    "https://footballi.net/team/3/%D8%B3%D9%BE%D8%A7%D9%87%D8%A7%D9%86",
-    "https://footballi.net/team/17/%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
+    f"{PROTO}://footballi.net/video",
+    f"{PROTO}://footballi.net/news/video",
+    f"{PROTO}://footballi.net/news/tag/%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%A8%D8%B1%D8%AA%D8%B1",
+    f"{PROTO}://footballi.net/news/tag/%D8%B4%D8%A8-%D9%87%D8%A7%DB%8C-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84%DB%8C",
+    f"{PROTO}://footballi.net/team/1/%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84",
+    f"{PROTO}://footballi.net/team/2/%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
+    f"{PROTO}://footballi.net/team/3/%D8%B3%D9%BE%D8%A7%D9%87%D8%A7%D9%86",
+    f"{PROTO}://footballi.net/team/17/%D8%AA%D8%B1%D8%A7%DA%A9%D8%AA%D9%88%D8%B1",
 ]
+FOOTBALLI_URLS = ENTRY_URLS
+SEED_URLS = ENTRY_URLS
 
-# لیست سیاه کپی‌رایت (ویدیوهای مسابقات خارجی و آسیایی)
+# لیست سیاه کپی‌رایت (هر دو نام متغیر برای سازگاری با ai_seo.py و scrapers.py)
 FOREIGN_BLACKLIST = [
     "لالیگا", "لیگ برتر انگلیس", "سری آ", "بوندسلیگا", "لیگ قهرمانان اروپا",
     "لیگ نخبگان آسیا", "لیگ قهرمانان آسیا", "رئال مادرید", "بارسلونا",
@@ -40,6 +48,8 @@ FOREIGN_BLACKLIST = [
     "چلسی", "بایرن مونیخ", "یوونتوس", "اینتر میلان", "آث میلان", "پاری سن ژرمن",
     "النصر", "الهلال", "الاتحاد", "الاهلی", "خلاصه بازی های خارجی",
 ]
+FORBIDDEN_KEYWORDS = FOREIGN_BLACKLIST
+BLACKLIST_KEYWORDS = FOREIGN_BLACKLIST
 
 SUMMARY_KEYWORDS = [
     "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "گل های بازی", "گل‌های بازی"
@@ -53,7 +63,7 @@ POSHTE_KHAT_KEYWORDS = [
     "پشت خط", "پُشتِ خَط", "پشت‌خط"
 ]
 
-# تعریف کامل ۱۴ پلی‌لیست رسمی کانال به همراه کلمات کلیدی هوشمند
+# تعریف کامل ۱۴ پلی‌لیست رسمی کانال
 PLAYLIST_DEFINITIONS = {
     "SUMMARY": {
         "title": "خلاصه بازی‌ها",
@@ -146,3 +156,17 @@ PLAYLIST_DEFINITIONS = {
         "keywords": ["مصاحبه", "نشست خبری", "کنفرانس خبری", "حواشی", "صحبت های", "گفت و گو"],
     },
 }
+
+PLAYLIST_NAMES = {k: v["title"] for k, v in PLAYLIST_DEFINITIONS.items()}
+
+
+def __getattr__(name: str):
+    """جلوگیری قطعی از ImportError اگر ماژولی دنبال متغیر دیگری در config گشت"""
+    defaults = {
+        "ARVAN_BASE_URL": f"{PROTO}://ai.najafivip.ir/v1",
+        "DOMESTIC_WHITELIST": ["ایران", "لیگ برتر", "جام حذفی", "استقلال", "پرسپولیس", "سپاهان", "تراکتور"],
+        "CHANNEL_TITLE": "Footballi - Football News & Media",
+    }
+    if name in defaults:
+        return defaults[name]
+    return ""
