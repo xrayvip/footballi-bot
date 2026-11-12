@@ -81,6 +81,13 @@ def get_youtube_client():
     return build("youtube", "v3", credentials=creds)
 
 
+# نام‌های معادل برای سازگاری با comment_manager.py در صورت ایمپورت
+load_history = load_state
+save_history = save_state
+get_authenticated_service = get_youtube_client
+get_youtube_service = get_youtube_client
+
+
 def detect_primary_category(title: str, description: str = "", is_short: bool = False) -> str:
     if is_short:
         return "SHORTS"
@@ -98,11 +105,6 @@ def detect_primary_category(title: str, description: str = "", is_short: bool = 
 
 
 def detect_all_matching_playlists(title: str, description: str = "", is_short: bool = False) -> list:
-    """
-    تشخیص هوشمند تمام پلی‌لیست‌های مرتبط با یک ویدیو (Multi-Playlist Engine)
-    مثلاً ویدیوی «کارشناسی داوری بازی استقلال در فوتبال برتر» هم‌زمان در
-    «کارشناسی داوری»، «فوتبال برتر» و «باشگاه استقلال» قرار می‌گیرد.
-    """
     matched = []
     norm_title = normalize_persian(title).lower()
     norm_full = normalize_persian(f"{title} {description}").lower()
@@ -110,7 +112,6 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
     if is_short or "#shorts" in norm_title:
         matched.append("SHORTS")
 
-    # بررسی تک‌تک پلی‌لیست‌های تخصصی بر اساس عنوان و توضیحات
     check_order = [
         "SUMMARY",
         "VIDEOCAST",
@@ -130,9 +131,7 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
         pdef = PLAYLIST_DEFINITIONS.get(key, {})
         for kw in pdef.get("keywords", []):
             norm_kw = normalize_persian(kw).lower()
-            # برای نام تیم‌ها و برنامه‌ها، تطابق در عنوان یا ابتدای توضیحات بررسی می‌شود
             if norm_kw in norm_title or norm_kw in norm_full[:280]:
-                # جلوگیری از اشتباه گرفتن «استقلال خوزستان» با «باشگاه استقلال» وقتی استقلال تهران در بازی نیست
                 if key == "ESTEGHLAL" and "استقلال خوزستان" in norm_title:
                     rem = norm_title.replace("استقلال خوزستان", "")
                     if "استقلال" not in rem:
@@ -141,7 +140,6 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
                     matched.append(key)
                 break
 
-    # اگر ویدیو افقی بود و در دسته‌های خلاصه بازی/ویدیوکست/پشت خط نبود، در مصاحبه و حواشی هم قرار بگیرد
     if not is_short and not any(k in matched for k in ["SUMMARY", "VIDEOCAST", "POSHTE_KHAT"]):
         if "INTERVIEW" not in matched:
             matched.append("INTERVIEW")
@@ -150,9 +148,6 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
 
 
 def ensure_all_playlists(youtube, state: dict) -> dict:
-    """
-    بررسی و ساخت ۱۴ پلی‌لیست در کانال یوتیوب + تغییر نام خودکار «پشت خط» به «پُشتِ خَط»
-    """
     existing_map = {}
     try:
         req = youtube.playlists().list(part="snippet", mine=True, maxResults=50)
@@ -173,12 +168,10 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
         target_desc = pdef["description"]
         legacy_titles = pdef.get("legacy_titles", [])
 
-        # ۱. بررسی اینکه آیا با نام دقیق فعلی وجود دارد
         if target_title in existing_map:
             playlists_state[key] = existing_map[target_title]
             continue
 
-        # ۲. بررسی عناوین قدیمی (مثلاً تبدیل «پشت خط» بدون اعراب به «پُشتِ خَط»)
         found_legacy_id = None
         for leg in legacy_titles:
             if leg in existing_map:
@@ -205,7 +198,6 @@ def ensure_all_playlists(youtube, state: dict) -> dict:
                 pass
             continue
 
-        # ۳. ساخت پلی‌لیست جدید در صورت عدم وجود
         try:
             created = youtube.playlists().insert(
                 part="snippet,status",
@@ -266,7 +258,6 @@ def add_video_to_playlists(youtube, video_id: str, playlist_keys: list, playlist
 
 
 def fetch_channel_existing_videos(youtube, max_items: int = 120) -> list:
-    """دریافت لیست ویدیوهای فعلی کانال با مصرف فقط ۱ واحد سهمیه API"""
     videos = []
     try:
         ch_res = youtube.channels().list(part="contentDetails", mine=True).execute()
@@ -298,11 +289,7 @@ def fetch_channel_existing_videos(youtube, max_items: int = 120) -> list:
     return videos
 
 
-def organize_existing_channel_videos(youtube, channel_videos: list, playlists_map: dict, state: dict, max_ops_per_run: int = 12):
-    """
-    دسته‌بندی خودکار تمامی ویدیوهای قبلی کانال در ۱۴ پلی‌لیست جدید
-    (در هر اجرا حداکثر ۱۲ عملیات درج انجام می‌شود تا سهمیه API یوتیوب حفظ شود)
-    """
+def organize_existing_channel_videos(youtube, channel_videos: list, playlists_map: dict, state: dict, max_ops_per_run: int = 10):
     ops = 0
     assignments = state.setdefault("playlist_assignments", {})
 
@@ -323,13 +310,29 @@ def organize_existing_channel_videos(youtube, channel_videos: list, playlists_ma
             ops += added
 
 
+def normalize_queue_item(item: dict) -> dict:
+    """حفظ سازگاری کامل با آیتم‌های قبلی موجود در صف"""
+    if not isinstance(item, dict):
+        return {}
+    u = item.get("url") or item.get("page_url") or item.get("link") or ""
+    mp4 = item.get("mp4_url") or item.get("video_url") or item.get("mp4") or ""
+    title = item.get("title") or item.get("raw_title") or item.get("seo_title") or ""
+    poster = item.get("poster_url") or item.get("poster") or item.get("thumbnail") or ""
+    item["url"] = u
+    item["mp4_url"] = mp4
+    item["title"] = title
+    item["poster_url"] = poster
+    return item
+
+
 def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_norm_titles: set) -> list:
     clean = []
     q_urls = set()
     q_mp4s = set()
     q_titles = set()
 
-    for item in queue:
+    for raw_item in queue:
+        item = normalize_queue_item(raw_item)
         u = item.get("url", "")
         mp4 = item.get("mp4_url", "")
         t = normalize_persian(item.get("title", "")).lower()
@@ -350,7 +353,6 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
 
 
 def call_prepare_thumbnail(video_path: str, poster_url: str, output_path: str) -> str:
-    """فراخوانی سازگار با هر امضای تابع prepare_clean_thumbnail در media_utils"""
     fn = getattr(media_utils, "prepare_clean_thumbnail", None)
     if not fn:
         return None
@@ -369,7 +371,6 @@ def call_prepare_thumbnail(video_path: str, poster_url: str, output_path: str) -
 
 
 def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> dict:
-    """فراخوانی سازگار با ماژول ai_seo برای تولید تیتر، توضیحات و تگ‌ها"""
     for fn_name in ["generate_seo_metadata", "ai_generate_seo_metadata", "build_seo_package"]:
         fn = getattr(ai_seo, fn_name, None)
         if fn:
@@ -399,15 +400,13 @@ def main():
     print("[START] Footballi Bot starting (Chrome Browser + 14 Multi-Playlist Edition)...")
     state = load_state()
 
-    # محاسبه ریست روزانه ساعت ۱۱:۳۰ صبح به وقت تهران (۰۸:۰۰ UTC)
     now_utc = datetime.now(timezone.utc)
-    reset_Key = (now_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
-    if state["daily_uploads"].get("date") != reset_Key:
-        state["daily_uploads"] = {"date": reset_Key, "count": 0}
+    reset_key = (now_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
+    if not isinstance(state.get("daily_uploads"), dict) or state["daily_uploads"].get("date") != reset_key:
+        state["daily_uploads"] = {"date": reset_key, "count": 0}
 
     youtube = get_youtube_client()
 
-    # ۱. ایندکس ویدیوهای فعلی کانال
     channel_videos = fetch_channel_existing_videos(youtube, max_items=120)
     channel_norm_titles = {normalize_persian(v["title"]).lower() for v in channel_videos}
     uploads_today = state["daily_uploads"].get("count", 0)
@@ -418,11 +417,9 @@ def main():
         f"(Reserved for Match Summaries: {RESERVED_SUMMARY_SLOTS})"
     )
 
-    # ۲. اطمینان از وجود هر ۱۴ پلی‌لیست و مرتب‌سازی تدریجی ویدیوهای قبلی کانال
     playlists_map = ensure_all_playlists(youtube, state)
     organize_existing_channel_videos(youtube, channel_videos, playlists_map, state, max_ops_per_run=10)
 
-    # ۳. پالایش صف فعلی
     uploaded_urls = set(state.get("uploaded_urls", []))
     seen_mp4s = set(state.get("seen_mp4s", []))
     state["pending_queue"] = deduplicate_queue(
@@ -430,7 +427,6 @@ def main():
     )
     print(f"[QUEUE] {len(state['pending_queue'])} unique verified videos ready in Pending Queue.")
 
-    # ۴. اسکن سایت فوتبالی با مرورگر کروم + اینستاگرام
     new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
     new_reels = fetch_instagram_reels(state)
 
@@ -444,7 +440,6 @@ def main():
         state["pending_queue"], uploaded_urls, seen_mp4s, channel_norm_titles
     )
 
-    # اولویت‌بندی صف: اول خلاصه بازی‌ها، بعد ویدیوکست و پُشتِ خَط، بعد بقیه
     priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
     state["pending_queue"].sort(key=lambda x: priority_order.get(x.get("category", "VIDEO"), 5))
     save_state(state)
@@ -453,7 +448,6 @@ def main():
         print("[DONE] No videos in queue to upload right now.")
         return
 
-    # ۵. بررسی فاصله زمانی ۴۵ دقیقه‌ای (مگر اینکه ویدیو خلاصه بازی باشد)
     candidate = state["pending_queue"][0]
     cat = candidate.get("category", "VIDEO")
     mins_since_last = (time.time() - float(state.get("last_upload_timestamp", 0))) / 60.0
@@ -469,7 +463,6 @@ def main():
         save_state(state)
         return
 
-    # ۶. دانلود و آماده‌سازی ویدیو و کاور HD
     video_file = "temp_video.mp4"
     thumb_file = "temp_thumb.jpg"
 
@@ -532,7 +525,6 @@ def main():
         vid_id = response["id"]
         print(f"✅ [SUCCESS] Uploaded Video ID: {vid_id}")
 
-        # ست کردن تامبنیل رسمی HD
         if thumb_to_use and os.path.exists(thumb_to_use) and not is_short:
             try:
                 youtube.thumbnails().set(
@@ -543,13 +535,11 @@ def main():
             except Exception as te:
                 print(f"[THUMB-WARN] Could not attach custom thumbnail: {te}")
 
-        # اضافه کردن هم‌زمان ویدیو به تمام پلی‌لیست‌های مرتبط (Multi-Playlist)
         matched_playlists = detect_all_matching_playlists(
             final_title, final_desc, is_short=is_short
         )
         add_video_to_playlists(youtube, vid_id, matched_playlists, playlists_map, state)
 
-        # ثبت در لیست آپلودشده‌ها و حذف از صف
         state["pending_queue"].pop(0)
         state["uploaded_urls"].append(candidate["url"])
         state["seen_mp4s"].append(candidate["mp4_url"])
