@@ -28,8 +28,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 5
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -45,8 +43,6 @@ jobs:
           fi
           pip install --quiet --disable-pip-version-check requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client playwright
           echo "✅ Setup completed in seconds! FFmpeg: $(which ffmpeg) | Chrome: $(which google-chrome)"
-
-          python -c 'import json, os, subprocess; p="uploaded_matches.json"; d=json.load(open(p,encoding="utf-8")) if os.path.exists(p) else {}; old_d=json.loads(subprocess.check_output(["git","show","754cdc3:uploaded_matches.json"],text=True)) if not d.get("processed_comments") else {}; c=len(old_d.get("processed_comments",[])); d["processed_comments"]=old_d["processed_comments"] if c else d.get("processed_comments",[]); json.dump(d,open(p,"w",encoding="utf-8"),ensure_ascii=False,indent=2) if c else None; print("[RESTORE] Restored", c, "comment IDs.") if c else None' || true
 
           echo ""
           echo "=== [2/4] Running Footballi Video Uploader & Queue ==="
