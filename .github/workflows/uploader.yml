@@ -42,12 +42,12 @@ jobs:
           if ! command -v ffmpeg &> /dev/null; then
             curl --max-time 25 -sL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | sudo tar -xJ --strip-components=2 -C /usr/local/bin --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
           fi
-          pip install --quiet --disable-pip-version-check requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client
-          echo "✅ Setup completed in seconds! FFmpeg: $(which ffmpeg)"
+          pip install --quiet --disable-pip-version-check requests beautifulsoup4 pillow google-api-python-client google-auth-oauthlib google-auth-httplib2 apify-client playwright
+          echo "✅ Setup completed in seconds! FFmpeg: $(which ffmpeg) | Chrome: $(which google-chrome)"
 
           echo ""
           echo "=== [2/4] Running Footballi Video Uploader & Queue ==="
-          timeout --kill-after=10s 210s stdbuf -oL -eL python -u footballi_uploader.py || echo "⚠️ [INFO] Uploader step finished."
+          timeout --kill-after=10s 240s stdbuf -oL -eL python -u footballi_uploader.py || echo "⚠️ [INFO] Uploader step finished."
 
           echo ""
           echo "=== [3/4] Running AI Comment Moderator & Responder ==="
