@@ -9,13 +9,13 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 from config import (
+    PROTO,
     HEADERS,
     ENTRY_URLS,
     FOREIGN_BLACKLIST,
     IRANIAN_DOMESTIC_CLUBS,
     IRANIAN_SAFE_SHOWS,
     IRANIAN_FOOTBALL_ENTITIES,
-    APIFY_COOLDOWN_HOURS,
 )
 
 
@@ -27,55 +27,174 @@ def normalize_persian(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# لیست گسترده چهره‌ها، لژیونرها و پیشکسوتان فوتبال ایران
+EXTENDED_IRANIAN_FIGURES = IRANIAN_FOOTBALL_ENTITIES + [
+    "قلی زاده", "قلی‌زاده", "صیادمنش", "سردار آزمون", "طارمی", "جهانبخش", "قایدی",
+    "قدوس", "محبی", "عزت اللهی", "عزت‌اللهی", "کنعانی", "شجاع", "بیرانوند", "نیازمند",
+    "حامد لک", "سیدحسین حسینی", "فرعباسی", "اخباری", "پورعلی گنجی", "حردانی",
+    "رضاییان", "ترابی", "اورونوف", "آسانی", "ماشاریپوف", "گندوز", "چشمی", "رفیعی",
+    "عالیشاه", "امیری", "سحرخیزان", "مغانلو", "حسین زاده", "آل کثیر", "قربانی",
+    "هاشمیان", "وحید هاشمیان", "نامجو مطلق", "دین محمدی", "حلالی", "اسماعیل حلالی",
+    "خاکپور", "قاسمپور", "قاسم پور", "مطهری", "حمید مطهری", "سراج", "اصغرزاده",
+    "توتونچی", "میثاقی", "فردوسی پور", "مظفری", "فغانی", "مرادی", "جباری", "صفیری",
+    "حیدری", "بنیادی فر", "عرب براقی", "زاهدی فر", "نصیرزاده", "تاج", "طالقانی",
+    "نکونام", "تارتار", "بختیاری", "موسیمانه", "گاریدو", "اسکوچیچ", "کارترون",
+    "قلعه نویی", "درویش", "خطیر", "سمیعی", "زنوزی", "الهامی", "رحمتی", "عنایتی",
+    "منصوریان", "مظلومی", "درخشان", "پیروانی", "پروین", "دایی", "کریمی", "مجیدی",
+    "باقری", "برومند", "رافت", "سامره", "بیک زاده", "ابوالقاسم پور", "فتاحی",
+    "ویسی", "جلالی", "آشوبی", "مسلمان", "جمشیدی", "علیدوستی", "شمسایی", "تهامی",
+    "عمران زاده", "پنجعلی", "بیانی", "اسفندیارپور", "پیشکسوتان", "جام ملتها", "جام ملت ها",
+]
+
+
+def is_match_broadcast_footage(norm_title: str) -> bool:
+    """تشخیص اینکه آیا ویدیو تصویر مسابقه/گل/خلاصه بازی است (که کپی‌رایت دارد) یا مصاحبه/برنامه"""
+    match_words = [
+        "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "هایلایت بازی", "بازی کامل",
+        "گل اول", "گل دوم", "گل سوم", "گل چهارم", "گل پنجم", "گل های بازی",
+        "گلهای بازی", "تمام گل های", "گل های برتر هفته", "ضربات پنالتی بازی",
+        "شبیه سازی گل",
+    ]
+    return any(normalize_persian(w).lower() in norm_title for w in match_words)
+
+
 def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
     """
-    فیلتر هوشمند کپی‌رایت:
-    ۱. برنامه‌های اختصاصی استودیویی و تلفنی (پشت خط، ویدیوکست، تپلیگ، فوتبال برتر، شب‌های فوتبالی، کارشناسی داوری)
-       تصویر مسابقه خارجی پخش نمی‌کنند و همیشه مجازند (مگر اینکه کل موضوع درباره رونالدو/مسی بدون هیچ نام ایرانی باشد).
-    ۲. هرگونه ویدیوی مسابقه (خلاصه بازی، گل اول/دوم، هایلایت، بازی کامل) حتماً باید مربوط به باشگاه‌های داخلی ایران باشد
-       و هیچ تیم یا کشور خارجی/آسیایی در عنوانش نباشد.
+    قفل هوشمند کپی‌رایت:
+    ۱. اگر ویدیو «خلاصه بازی / گل بازی / هایلایت بازی» است:
+       حتماً باید نام حداقل یکی از باشگاه‌های داخلی ایران در عنوان باشد و هیچ تیم/کشور خارجی در عنوان نباشد.
+    ۲. اگر ویدیو «مصاحبه / برنامه اختصاصی / صحبت پیشکسوتان و لژیونرها» است:
+       تا زمانی که مربوط به چهره‌ها، لژیونرها یا فوتبال ایران باشد (مثل مصاحبه قلی‌زاده درباره صیادمنش)، کاملاً مجاز است.
     """
     clean_title = re.sub(r"\|.*$", "", title).strip()
     norm_title = normalize_persian(clean_title).lower()
 
-    match_footage_words = [
-        "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "هایلایت", "بازی کامل",
-        "گل اول", "گل دوم", "گل سوم", "گل چهارم", "گل پنجم", "گل های",
-        "تمام گل", "کاشته های", "سریعترین گل", "پنالتی های", "کامبک", "شبیه سازی گل",
-    ]
-    is_match_footage = any(normalize_persian(w).lower() in norm_title for w in match_footage_words)
-
-    # الف) قانون آهنین برای ویدیوهای مسابقه (خلاصه بازی و گل‌ها):
-    if is_match_footage:
-        # ۱. اگر نام هر تیم، کشور یا لیگ خارجی/آسیایی در عنوان بازی باشد -> فوراً رد شود!
+    # ۱. قانون سخت‌گیرانه برای ویدیوهای مسابقه (خلاصه بازی و گل‌ها):
+    if is_match_broadcast_footage(norm_title):
         for bad_word in FOREIGN_BLACKLIST:
             if normalize_persian(bad_word).lower() in norm_title:
                 return True
-        # ۲. حتماً باید نام حداقل یکی از باشگاه‌های داخلی ایران در عنوان بازی باشد! (حذف شالکه-لایپزیش و هر بازی خارجی دیگر)
         has_iranian_club = any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS)
-        if not has_iranian_club:
+        return not has_iranian_club
+
+    # ۲. برای برنامه‌های گفتگو محور، مصاحبه‌ها و اخبار:
+    is_safe_show = any(normalize_persian(s).lower() in norm_title for s in IRANIAN_SAFE_SHOWS)
+    has_iranian_figure = any(normalize_persian(e).lower() in norm_title for e in EXTENDED_IRANIAN_FIGURES)
+
+    # اگر نام چهره/لژیونر/تیم ایرانی یا برنامه اختصاصی در عنوان هست، حتی اگر در مصاحبه‌اش نام تیم خارجی (مثل لخ پوزنان) را بیاورد مجاز است!
+    if is_safe_show or has_iranian_figure:
+        # فقط اگر کل ویدیو گل‌ها/مهارت‌های یک ستاره خارجی بدون ارتباط با ایران باشد رد شود
+        pure_foreign_clip_words = [
+            "گلها و مهارتهای", "تکنیک و گلهای", "دروازه بانی کایل واکر",
+            "کاشته های برتر بوندسلیگا", "دریبل های تماشایی لالیگا",
+            "برندگان لیگ قهرمانان اروپا", "آموزش حرکت های تکنیکی جدید بازی",
+        ]
+        if any(normalize_persian(pw).lower() in norm_title for pw in pure_foreign_clip_words):
             return True
         return False
 
-    # ب) برای ویدیوهای غیرمسابقه (برنامه‌های گفتگو محور و مصاحبه‌ها):
-    is_safe_show = any(normalize_persian(s).lower() in norm_title for s in IRANIAN_SAFE_SHOWS)
-    has_iranian_entity = any(normalize_persian(e).lower() in norm_title for e in IRANIAN_FOOTBALL_ENTITIES)
-
-    # اگر برنامه اختصاصی (مثل پشت خط یا ویدیوکست) است و درباره فوتبال ایران صحبت می‌کند، حتی اگر مثال «مسی و رونالدو» زده باشد مجاز است
-    if is_safe_show and has_iranian_entity:
-        return False
-
-    # اگر نام تیم یا ستاره خارجی در عنوان است و برنامه اختصاصی ایران نیست -> رد شود
+    # ۳. اگر نام ستاره یا باشگاه خارجی در عنوان است و هیچ ربطی به ایران ندارد -> رد شود
     for bad_word in FOREIGN_BLACKLIST:
         if normalize_persian(bad_word).lower() in norm_title:
-            if not has_iranian_entity:
-                return True
+            return True
 
-    # اگر هیچ ارتباطی با فوتبال و ورزش ایران ندارد (مثل ورزشگاه مارادونا یا آنفیلد) -> رد شود
-    if not has_iranian_entity:
+    # ۴. کلیپ‌های وایرال و سرگرمی خارجی بدون نام ایرانی -> رد شود
+    foreign_viral_patterns = [
+        "دیوانه وارترین", "تحقیرآمیزترین", "باورنکردنی ترین", "عجیب ترین و خنده دارترین",
+        "بهترین گل های لحظه آخری تاریخ", "گل های کاملاً تحقیرآمیز", "یک در میلیارد",
+        "چالش دقت و تمرکز", "کری خوانی به سبک فوتبال آمریکایی", "فوتبال در بین برزیلی ها",
+        "در لیگ ترکیه", "عملکرد جالب و دیدنی روماریو", "ضربات پنالتی تاریخ",
+    ]
+    if any(normalize_persian(fp).lower() in norm_title for fp in foreign_viral_patterns):
         return True
 
-    return False
+    # ۵. اگر ساختار مصاحبه فارسی دارد («نام شخص: متن صحبت» درباره لیگ/تیم ملی/داوری/فوتبال) مجاز است
+    if ":" in clean_title and any(
+        w in norm_title for w in ["لیگ", "تیم ملی", "فوتبال", "داور", "بازیکن", "مربی", "جام", "باشگاه", "استادیوم", "هوادار"]
+    ):
+        return False
+
+    return True
+
+
+def ai_batch_verify_borderline_titles(candidates: list) -> list:
+    """
+    بررسی تکمیلی با هوش مصنوعی برای اینکه هیچ مصاحبه ایرانی (حتی با نام‌های جدید) جا نماند
+    و هیچ کلیپ خارجی وارد صف نشود
+    """
+    if not candidates:
+        return []
+
+    arvan_key = os.environ.get("ARVAN_API_KEY", "").strip()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not arvan_key and not gemini_key:
+        return [c for c in candidates if not is_foreign_or_blacklisted(c["title"], c.get("description", ""))]
+
+    approved = []
+    borderline = []
+
+    for c in candidates:
+        norm_t = normalize_persian(c["title"]).lower()
+        # خلاصه بازی‌ها با قانون قطعی باشگاه‌های ایران بررسی می‌شوند
+        if is_match_broadcast_footage(norm_t):
+            if not is_foreign_or_blacklisted(c["title"], c.get("description", "")):
+                approved.append(c)
+            else:
+                print(f"🚫 [SKIP-FOREIGN-MATCH] Rejecting foreign match footage: {c['title']}")
+            continue
+
+        if not is_foreign_or_blacklisted(c["title"], c.get("description", "")):
+            approved.append(c)
+        else:
+            # اگر نام تیم/ستاره خارجی صریح در آن نیست ولی در لیست سفید هم نبود، از هوش مصنوعی بپرس
+            has_explicit_foreign = any(normalize_persian(bw).lower() in norm_t for bw in FOREIGN_BLACKLIST)
+            if not has_explicit_foreign:
+                borderline.append(c)
+            else:
+                print(f"🚫 [SKIP-FOREIGN] Rejecting foreign clip: {c['title']}")
+
+    if not borderline:
+        return approved
+
+    prompt_items = [{"index": i, "title": c["title"]} for i, c in enumerate(borderline)]
+    prompt = (
+        "You are the content filter for 'Footballi', an Iranian domestic football YouTube channel.\n"
+        "Review these Persian video titles. Approve (true) ANY video that is an interview, press conference, "
+        "or news item about Iranian football, Iranian players/coaches/veterans/legionnaires, or domestic Iranian sports.\n"
+        "Reject (false) generic foreign viral football compilations or foreign leagues.\n"
+        "Return ONLY valid JSON mapping index to boolean, e.g. {\"0\": true, \"1\": false}.\n\n"
+        f"Videos:\n{json.dumps(prompt_items, ensure_ascii=False)}"
+    )
+
+    decisions = {}
+    if arvan_key:
+        try:
+            r = requests.post(
+                f"{PROTO}ai.najafivip.ir/v1/chat/completions",
+                headers={"Authorization": f"Bearer {arvan_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "Gemini-2.5-Flash-lite",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                txt = r.json()["choices"][0]["message"]["content"]
+                m = re.search(r"\{.*\}", txt, re.DOTALL)
+                if m:
+                    decisions = json.loads(m.group(0))
+        except Exception:
+            pass
+
+    for i, c in enumerate(borderline):
+        if decisions.get(str(i)) is True:
+            print(f"✅ [AI-APPROVED] Verified Iranian football interview/video: {c['title']}")
+            approved.append(c)
+        else:
+            print(f"🚫 [SKIP-FOREIGN] Rejecting non-domestic video: {c['title']}")
+
+    return approved
 
 
 def find_system_chrome() -> str:
@@ -305,9 +424,9 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
 
     print(f"[CRAWLER] Found {len(candidate_links)} fresh candidate video pages to inspect.")
 
-    results = []
+    raw_extracted = []
     idx = 0
-    while idx < len(candidate_links) and len(results) < max_new_candidates:
+    while idx < len(candidate_links) and len(raw_extracted) < max_new_candidates * 2:
         link = candidate_links[idx]
         idx += 1
 
@@ -316,18 +435,13 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             continue
 
         for rel_url in details.get("related_links", []):
-            if len(candidate_links) < 80:
+            if len(candidate_links) < 85:
                 add_link(rel_url)
 
         if details["mp4_url"] in seen_mp4s or details["mp4_url"] in queued_mp4s:
             continue
 
-        if is_foreign_or_blacklisted(details["title"], details["description"]):
-            print(f"🚫 [SKIP-FOREIGN] Rejecting non-domestic/copyrighted video: {details['title']}")
-            continue
-
-        seen_mp4s.add(details["mp4_url"])
-        results.append({
+        raw_extracted.append({
             "url": details["url"],
             "title": details["title"],
             "description": details["description"],
@@ -336,6 +450,13 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             "source": "footballi_web",
             "is_short": False,
         })
+
+    # غربال هوشمند با ترکیب لیست سفید + هوش مصنوعی برای حفظ ۱۰۰٪ مصاحبه‌های ایرانی و حذف بازی‌های خارجی
+    verified = ai_batch_verify_borderline_titles(raw_extracted)
+    results = []
+    for item in verified[:max_new_candidates]:
+        seen_mp4s.add(item["mp4_url"])
+        results.append(item)
 
     print(f"[CRAWLER] Verified {len(results)} brand-new strictly domestic Iranian videos from Footballi.net!")
     return results
