@@ -3331,6 +3331,16 @@
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1045825/%D8%A7%D8%B3%D8%AA%D9%82%D8%A8%D8%A7%D9%84-%D8%AA%D8%A7%D8%B1%DB%8C%D8%AE%DB%8C-%D9%87%D9%88%D8%A7%D8%AF%D8%A7%D8%B1%D8%A7%D9%86-%D8%A7%D8%B2-%D8%AA%DB%8C%D9%85-%D9%85%D9%84%DB%8C-%D9%85%D8%B1%D8%A7%DA%A9%D8%B4",
+      "title": "استقبال تاریخی هواداران از تیم ملی مراکش",
+      "description": "با وجود حذف از جام جهانی ۲۰۲۶، تیم ملی مراکش هنگام بازگشت به رباط با استقبالی باشکوه و احساسی روبه‌ رو شد.",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/07/12/tus-9ce313ff-d7ce-4802-ab8c-21fb4fe55e9a.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/07/12/17838603413056.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
     }
   ],
   "organized_playlist_vids": [
@@ -3926,8 +3936,10 @@
       "SUMMARY"
     ]
   },
-  "upload_limit_cooldown_until": 1794608039.3928797,
+  "upload_limit_cooldown_until": 1794619741.8374362,
   "quota_exhausted_date": "2026-11-12",
   "ignored_comments": [],
-  "deleted_comments": []
+  "deleted_comments": [
+    "UgwCAcPvVRxAwbDwXvN4AaABAg"
+  ]
 }
