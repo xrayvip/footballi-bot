@@ -155,28 +155,6 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
     return matched
 
 
-def purge_foreign_videos_from_channel(youtube, channel_videos: list) -> list:
-    """
-    شناسایی و حذف خودکار هرگونه ویدیوی خارجی (مثل شالکه - لایپزیش) که روی کانال آپلود شده باشد
-    """
-    clean_channel_videos = []
-    explicit_delete_ids = {"Nl6rmPROORM"}  # شناسه ویدیوی شالکه - لایپزیش
-
-    for vid in channel_videos:
-        vid_id = vid["video_id"]
-        title = vid["title"]
-        if vid_id in explicit_delete_ids or is_foreign_or_blacklisted(title, ""):
-            try:
-                youtube.videos().delete(id=vid_id).execute()
-                print(f"🗑️ [COPYRIGHT-CLEANUP] Deleted foreign video from YouTube channel: {title} ({vid_id})")
-            except Exception as e:
-                print(f"[CLEANUP-WARN] Could not delete {vid_id} ({title}): {e}")
-        else:
-            clean_channel_videos.append(vid)
-
-    return clean_channel_videos
-
-
 def ensure_all_playlists(youtube, state: dict) -> dict:
     playlists_state = state.get("playlists", {})
     if all(k in playlists_state and playlists_state[k] for k in PLAYLIST_DEFINITIONS):
@@ -399,7 +377,6 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
 
 
 def call_ai_copyright_audit(title: str, desc: str) -> bool:
-    """ممیزی نهایی کپی‌رایت با هوش مصنوعی قبل از آپلود"""
     if is_foreign_or_blacklisted(title, desc):
         return False
     audit_fn = getattr(ai_seo, "ai_free_copyright_audit", None)
@@ -466,7 +443,7 @@ def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> d
 
 
 def main():
-    print("[START] Footballi Bot starting (Strict Iranian Whitelist + Auto-Cleanup Edition)...")
+    print("[START] Footballi Bot starting (Strict Iranian Match Whitelist + Safe Shows Edition)...")
     state = load_state()
     reset_key = get_tehran_reset_key()
 
@@ -478,12 +455,10 @@ def main():
     seen_mp4s = set(state.get("seen_mp4s", []))
     channel_norm_titles = {normalize_persian(t).lower() for t in state.get("uploaded_titles", [])}
 
-    # ۱. پاکسازی فوری صف فعلی با لیست سفید ایران قبل از هر کاری
     state["pending_queue"] = deduplicate_queue(
         state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
     )
 
-    # ۲. اسکن سایت فوتبالی با مرورگر کروم
     new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
     for item in new_web_videos:
         item["category"] = detect_primary_category(
@@ -510,9 +485,6 @@ def main():
         save_state(state)
         return
 
-    # ۳. حذف خودکار هرگونه ویدیوی خارجی آپلودشده از روی کانال (مثل شالکه - لایپزیش)
-    channel_videos = purge_foreign_videos_from_channel(youtube, channel_videos)
-
     for v in channel_videos:
         channel_norm_titles.add(normalize_persian(v["title"]).lower())
 
@@ -537,7 +509,6 @@ def main():
         print(f"🛡️ [QUOTA-SHIELD] Channel 24h upload cap active. Pausing upload attempts for {rem_min:.0f}m to preserve API quota.")
         return
 
-    # ۴. انتخاب اولین ویدیوی مجاز و ممیزی نهایی کپی‌رایت
     candidate = None
     while state["pending_queue"]:
         top = state["pending_queue"][0]
