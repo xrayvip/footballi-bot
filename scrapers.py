@@ -8,7 +8,14 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-from config import HEADERS, ENTRY_URLS, FOREIGN_BLACKLIST, APIFY_COOLDOWN_HOURS
+from config import (
+    HEADERS,
+    ENTRY_URLS,
+    FOREIGN_BLACKLIST,
+    IRANIAN_DOMESTIC_CLUBS,
+    IRANIAN_FOOTBALL_ENTITIES,
+    APIFY_COOLDOWN_HOURS,
+)
 
 
 def normalize_persian(text: str) -> str:
@@ -20,23 +27,46 @@ def normalize_persian(text: str) -> str:
 
 
 def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
-    norm_title = normalize_persian(title).lower()
+    """
+    قفل دوگانه ضد کپی‌رایت (Zero-Trust Copyright Filter):
+    ۱. هرگونه خلاصه بازی، هایلایت یا گل باید مربوط به باشگاه‌های داخل ایران باشد و هیچ تیم/تورنمنت خارجی یا آسیایی در آن نباشد.
+    ۲. هر ویدیویی که حداقل یکی از نام‌های فوتبال داخلی ایران (لیست سفید) را در عنوانش نداشته باشد، فوراً رد می‌شود.
+    """
+    clean_title = re.sub(r"\|.*$", "", title).strip()
+    norm_title = normalize_persian(clean_title).lower()
 
-    # برنامه‌های اختصاصی و گفتگو محور فوتبالی (ویدیوکست، پشت خط، مصاحبه و داوری) تصویر بازی خارجی ندارند و همیشه مجازند
-    safe_talk_keywords = [
-        "ویدیوکست", "ویدیو کست", "پشت خط", "کارشناسی داوری",
-        "مصاحبه", "نشست خبری", "صحبت های", "گفت و گو", "فوتبال برتر", "شب های فوتبالی"
+    # کلمات نشان‌دهنده ویدیوی مسابقه (خلاصه بازی، گل، هایلایت و...)
+    match_footage_words = [
+        "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "هایلایت", "بازی کامل",
+        "گل اول", "گل دوم", "گل سوم", "گل چهارم", "گل پنجم", "گل های",
+        "تمام گل", "کاشته های", "سریعترین گل", "پنالتی های", "کامبک",
     ]
-    for skw in safe_talk_keywords:
-        if normalize_persian(skw).lower() in norm_title:
-            return False
+    is_match_footage = any(normalize_persian(w).lower() in norm_title for w in match_footage_words)
 
-    # بررسی لیست سیاه فقط روی عنوان ویدیو (نه توضیحات عمومی سایت)
-    for word in FOREIGN_BLACKLIST:
-        if normalize_persian(word).lower() in norm_title:
+    # الف) بررسی لیست سیاه خارجی و آسیایی روی تمام ویدیوهای مسابقه
+    for bad_word in FOREIGN_BLACKLIST:
+        if normalize_persian(bad_word).lower() in norm_title:
+            # فقط اگر ویدیوکست یا پشت خط یا مصاحبه کلامی درباره نماینده ایران در آسیا بود مجاز است، نه خلاصه بازی!
+            if not is_match_footage and any(
+                normalize_persian(sw).lower() in norm_title
+                for sw in ["ویدیوکست", "ویدیو کست", "پشت خط", "نشست خبری", "مصاحبه", "صحبت های"]
+            ):
+                if any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS + ["تیم ملی ایران"]):
+                    continue
             return True
-    return False
 
+    # ب) اگر ویدیو «خلاصه بازی / گل / هایلایت» است، حتماً باید نام حداقل یک باشگاه ایرانی داخل عنوانش باشد!
+    if is_match_footage:
+        has_iranian_club = any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS)
+        if not has_iranian_club:
+            return True
+
+    # ج) قانون لیست سفید سراسری: عنوان ویدیو حتماً باید حداقل یک موجودیت فوتبال داخلی ایران داشته باشد
+    has_domestic_entity = any(normalize_persian(ent).lower() in norm_title for ent in IRANIAN_FOOTBALL_ENTITIES)
+    if not has_domestic_entity:
+        return True
+
+    return False
 
 
 def find_system_chrome() -> str:
@@ -61,13 +91,11 @@ def browser_discover_links(max_pages: int = 8) -> list:
     chrome_path = find_system_chrome()
 
     if not chrome_path:
-        print("[BROWSER] System Chrome not found, using fast SSR + API spider.")
         return []
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("[BROWSER] Playwright library not installed, skipping browser step.")
         return []
 
     print(f"[AI-BROWSER] Launching pre-installed System Chrome ({chrome_path}) to render footballi.net...")
@@ -286,7 +314,9 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             continue
 
         if is_foreign_or_blacklisted(details["title"], details["description"]):
-            print(f"🚫 [SKIP-FOREIGN] Rejecting foreign/blacklisted video: {details['title']}")
+            print(f"🚫 [SKIP-FOREIGN] Rejecting non-domestic/copyrighted video: {details['title']}")
+            # ثبت لینک در لیست دیده‌شده‌ها تا در ران‌های بعدی دوباره بررسی نشود
+            state.setdefault("uploaded_urls", []).append(details["url"])
             continue
 
         seen_mp4s.add(details["mp4_url"])
@@ -300,58 +330,9 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             "is_short": False,
         })
 
-    print(f"[CRAWLER] Verified {len(results)} brand-new domestic videos from Footballi.net!")
+    print(f"[CRAWLER] Verified {len(results)} brand-new strictly domestic Iranian videos from Footballi.net!")
     return results
 
 
 def fetch_instagram_reels(state: dict) -> list:
-    apify_token = os.environ.get("APIFY_TOKEN", "").strip()
-    if not apify_token:
-        return []
-
-    last_check = float(state.get("last_apify_check", 0))
-    elapsed_hours = (time.time() - last_check) / 3600.0
-    if elapsed_hours < APIFY_COOLDOWN_HOURS:
-        rem = APIFY_COOLDOWN_HOURS - elapsed_hours
-        print(f"[APIFY] Cooldown active ({rem:.1f}h remaining before next Instagram check).")
-        return []
-
-    try:
-        from apify_client import ApifyClient
-        client = ApifyClient(apify_token)
-        run_input = {
-            "username": ["footballiapp"],
-            "resultsLimit": 6,
-        }
-        print("[APIFY] Fetching latest Reels from @footballiapp...")
-        run = client.actor("apify/instagram-reel-scraper").call(run_input=run_input)
-        state["last_apify_check"] = time.time()
-
-        uploaded_urls = set(state.get("uploaded_urls", []))
-        seen_mp4s = set(state.get("seen_mp4s", []))
-        queued_urls = {item.get("url") for item in state.get("pending_queue", []) if item.get("url")}
-
-        reels = []
-        for item in client.dataset(run["defaultDatasetId"]).iterate_items():
-            reel_url = item.get("url") or f"https://www.instagram.com/p/{item.get('shortCode')}/"
-            video_url = item.get("videoUrl")
-            caption = (item.get("caption") or "").strip()
-            if not video_url or reel_url in uploaded_urls or reel_url in queued_urls or video_url in seen_mp4s:
-                continue
-            first_line = caption.split("\n")[0].strip() if caption else "ویدیوی کوتاه فوتبالی"
-            if is_foreign_or_blacklisted(first_line, caption):
-                continue
-            reels.append({
-                "url": reel_url,
-                "title": first_line[:95],
-                "description": caption,
-                "mp4_url": video_url,
-                "poster_url": item.get("displayUrl", ""),
-                "source": "instagram",
-                "is_short": True,
-            })
-        print(f"[APIFY] Added {len(reels)} fresh Reels from Instagram.")
-        return reels
-    except Exception as e:
-        print(f"[APIFY-WARN] Instagram check skipped: {e}")
-        return []
+    return []
