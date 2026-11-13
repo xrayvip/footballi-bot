@@ -13,6 +13,7 @@ from config import (
     ENTRY_URLS,
     FOREIGN_BLACKLIST,
     IRANIAN_DOMESTIC_CLUBS,
+    IRANIAN_SAFE_SHOWS,
     IRANIAN_FOOTBALL_ENTITIES,
     APIFY_COOLDOWN_HOURS,
 )
@@ -28,42 +29,50 @@ def normalize_persian(text: str) -> str:
 
 def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
     """
-    قفل دوگانه ضد کپی‌رایت (Zero-Trust Copyright Filter):
-    ۱. هرگونه خلاصه بازی، هایلایت یا گل باید مربوط به باشگاه‌های داخل ایران باشد و هیچ تیم/تورنمنت خارجی یا آسیایی در آن نباشد.
-    ۲. هر ویدیویی که حداقل یکی از نام‌های فوتبال داخلی ایران (لیست سفید) را در عنوانش نداشته باشد، فوراً رد می‌شود.
+    فیلتر هوشمند کپی‌رایت:
+    ۱. برنامه‌های اختصاصی استودیویی و تلفنی (پشت خط، ویدیوکست، تپلیگ، فوتبال برتر، شب‌های فوتبالی، کارشناسی داوری)
+       تصویر مسابقه خارجی پخش نمی‌کنند و همیشه مجازند (مگر اینکه کل موضوع درباره رونالدو/مسی بدون هیچ نام ایرانی باشد).
+    ۲. هرگونه ویدیوی مسابقه (خلاصه بازی، گل اول/دوم، هایلایت، بازی کامل) حتماً باید مربوط به باشگاه‌های داخلی ایران باشد
+       و هیچ تیم یا کشور خارجی/آسیایی در عنوانش نباشد.
     """
     clean_title = re.sub(r"\|.*$", "", title).strip()
     norm_title = normalize_persian(clean_title).lower()
 
-    # کلمات نشان‌دهنده ویدیوی مسابقه (خلاصه بازی، گل، هایلایت و...)
     match_footage_words = [
         "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "هایلایت", "بازی کامل",
         "گل اول", "گل دوم", "گل سوم", "گل چهارم", "گل پنجم", "گل های",
-        "تمام گل", "کاشته های", "سریعترین گل", "پنالتی های", "کامبک",
+        "تمام گل", "کاشته های", "سریعترین گل", "پنالتی های", "کامبک", "شبیه سازی گل",
     ]
     is_match_footage = any(normalize_persian(w).lower() in norm_title for w in match_footage_words)
 
-    # الف) بررسی لیست سیاه خارجی و آسیایی روی تمام ویدیوهای مسابقه
-    for bad_word in FOREIGN_BLACKLIST:
-        if normalize_persian(bad_word).lower() in norm_title:
-            # فقط اگر ویدیوکست یا پشت خط یا مصاحبه کلامی درباره نماینده ایران در آسیا بود مجاز است، نه خلاصه بازی!
-            if not is_match_footage and any(
-                normalize_persian(sw).lower() in norm_title
-                for sw in ["ویدیوکست", "ویدیو کست", "پشت خط", "نشست خبری", "مصاحبه", "صحبت های"]
-            ):
-                if any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS + ["تیم ملی ایران"]):
-                    continue
-            return True
-
-    # ب) اگر ویدیو «خلاصه بازی / گل / هایلایت» است، حتماً باید نام حداقل یک باشگاه ایرانی داخل عنوانش باشد!
+    # الف) قانون آهنین برای ویدیوهای مسابقه (خلاصه بازی و گل‌ها):
     if is_match_footage:
+        # ۱. اگر نام هر تیم، کشور یا لیگ خارجی/آسیایی در عنوان بازی باشد -> فوراً رد شود!
+        for bad_word in FOREIGN_BLACKLIST:
+            if normalize_persian(bad_word).lower() in norm_title:
+                return True
+        # ۲. حتماً باید نام حداقل یکی از باشگاه‌های داخلی ایران در عنوان بازی باشد! (حذف شالکه-لایپزیش و هر بازی خارجی دیگر)
         has_iranian_club = any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS)
         if not has_iranian_club:
             return True
+        return False
 
-    # ج) قانون لیست سفید سراسری: عنوان ویدیو حتماً باید حداقل یک موجودیت فوتبال داخلی ایران داشته باشد
-    has_domestic_entity = any(normalize_persian(ent).lower() in norm_title for ent in IRANIAN_FOOTBALL_ENTITIES)
-    if not has_domestic_entity:
+    # ب) برای ویدیوهای غیرمسابقه (برنامه‌های گفتگو محور و مصاحبه‌ها):
+    is_safe_show = any(normalize_persian(s).lower() in norm_title for s in IRANIAN_SAFE_SHOWS)
+    has_iranian_entity = any(normalize_persian(e).lower() in norm_title for e in IRANIAN_FOOTBALL_ENTITIES)
+
+    # اگر برنامه اختصاصی (مثل پشت خط یا ویدیوکست) است و درباره فوتبال ایران صحبت می‌کند، حتی اگر مثال «مسی و رونالدو» زده باشد مجاز است
+    if is_safe_show and has_iranian_entity:
+        return False
+
+    # اگر نام تیم یا ستاره خارجی در عنوان است و برنامه اختصاصی ایران نیست -> رد شود
+    for bad_word in FOREIGN_BLACKLIST:
+        if normalize_persian(bad_word).lower() in norm_title:
+            if not has_iranian_entity:
+                return True
+
+    # اگر هیچ ارتباطی با فوتبال و ورزش ایران ندارد (مثل ورزشگاه مارادونا یا آنفیلد) -> رد شود
+    if not has_iranian_entity:
         return True
 
     return False
@@ -315,8 +324,6 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
 
         if is_foreign_or_blacklisted(details["title"], details["description"]):
             print(f"🚫 [SKIP-FOREIGN] Rejecting non-domestic/copyrighted video: {details['title']}")
-            # ثبت لینک در لیست دیده‌شده‌ها تا در ران‌های بعدی دوباره بررسی نشود
-            state.setdefault("uploaded_urls", []).append(details["url"])
             continue
 
         seen_mp4s.add(details["mp4_url"])
