@@ -25,7 +25,6 @@ from config import (
 )
 from scrapers import (
     crawl_footballi_videos,
-    fetch_instagram_reels,
     normalize_persian,
     is_foreign_or_blacklisted,
 )
@@ -39,7 +38,6 @@ SCOPES = [
 
 
 def get_tehran_reset_key() -> str:
-    """ریست روزانه سهمیه گوگل کلود هر روز ساعت ۱۱:۳۰ صبح تهران (۰۸:۰۰ UTC)"""
     now_utc = datetime.now(timezone.utc)
     return (now_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
 
@@ -157,9 +155,30 @@ def detect_all_matching_playlists(title: str, description: str = "", is_short: b
     return matched
 
 
+def purge_foreign_videos_from_channel(youtube, channel_videos: list) -> list:
+    """
+    شناسایی و حذف خودکار هرگونه ویدیوی خارجی (مثل شالکه - لایپزیش) که روی کانال آپلود شده باشد
+    """
+    clean_channel_videos = []
+    explicit_delete_ids = {"Nl6rmPROORM"}  # شناسه ویدیوی شالکه - لایپزیش
+
+    for vid in channel_videos:
+        vid_id = vid["video_id"]
+        title = vid["title"]
+        if vid_id in explicit_delete_ids or is_foreign_or_blacklisted(title, ""):
+            try:
+                youtube.videos().delete(id=vid_id).execute()
+                print(f"🗑️ [COPYRIGHT-CLEANUP] Deleted foreign video from YouTube channel: {title} ({vid_id})")
+            except Exception as e:
+                print(f"[CLEANUP-WARN] Could not delete {vid_id} ({title}): {e}")
+        else:
+            clean_channel_videos.append(vid)
+
+    return clean_channel_videos
+
+
 def ensure_all_playlists(youtube, state: dict) -> dict:
     playlists_state = state.get("playlists", {})
-    # اگر هر ۱۴ پلی‌لیست از قبل در فایل وضعیت ثبت شده‌اند، نیازی به مصرف سهمیه API نیست
     if all(k in playlists_state and playlists_state[k] for k in PLAYLIST_DEFINITIONS):
         return playlists_state
 
@@ -311,7 +330,6 @@ def fetch_channel_existing_videos(youtube, state: dict, max_items: int = 100) ->
 
 
 def organize_existing_channel_videos(youtube, channel_videos: list, playlists_map: dict, state: dict, max_ops_per_run: int = 3):
-    """مرتب‌سازی تدریجی با سقف ۳ درج در هر اجرا برای حفظ کامل سهمیه روزانه API"""
     ops = 0
     assignments = state.setdefault("playlist_assignments", {})
 
@@ -338,7 +356,6 @@ def normalize_queue_item(item: dict) -> dict:
     u = item.get("url") or item.get("page_url") or item.get("link") or ""
     mp4 = item.get("mp4_url") or item.get("video_url") or item.get("mp4") or ""
     title = item.get("title") or item.get("raw_title") or item.get("seo_title") or ""
-    # حذف پسوند اشتباه «| خلاصه بازی» اگر از قبل روی مصاحبه‌ها مانده باشد
     title = re.sub(r"\s*\|\s*خلاصه بازی\s*$", "", title).strip()
     poster = item.get("poster_url") or item.get("poster") or item.get("thumbnail") or ""
     is_short = bool(item.get("is_short", False))
@@ -355,6 +372,7 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
     q_urls = set()
     q_mp4s = set()
     q_titles = set()
+    purged_count = 0
 
     for raw_item in queue:
         item = normalize_queue_item(raw_item)
@@ -365,6 +383,7 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
         if not u or not mp4 or not t:
             continue
         if is_foreign_or_blacklisted(item.get("title", ""), ""):
+            purged_count += 1
             continue
         if u in uploaded_urls or u in q_urls or mp4 in q_mp4s or t in q_titles or t in channel_norm_titles:
             continue
@@ -374,7 +393,32 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
         q_titles.add(t)
         clean.append(item)
 
+    if purged_count > 0:
+        print(f"🧹 [QUEUE-PURGE] Removed {purged_count} non-domestic/foreign videos from Pending Queue!")
     return clean
+
+
+def call_ai_copyright_audit(title: str, desc: str) -> bool:
+    """ممیزی نهایی کپی‌رایت با هوش مصنوعی قبل از آپلود"""
+    if is_foreign_or_blacklisted(title, desc):
+        return False
+    audit_fn = getattr(ai_seo, "ai_free_copyright_audit", None)
+    if audit_fn:
+        try:
+            sig = inspect.signature(audit_fn)
+            if len(sig.parameters) >= 3:
+                res = audit_fn(title, desc, "WEB")
+            elif len(sig.parameters) == 2:
+                res = audit_fn(title, desc)
+            else:
+                res = audit_fn(title)
+            if isinstance(res, bool):
+                return res
+            if isinstance(res, dict):
+                return bool(res.get("approved", True))
+        except Exception:
+            pass
+    return True
 
 
 def call_prepare_thumbnail(video_path: str, poster_url: str, output_path: str) -> str:
@@ -422,7 +466,7 @@ def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> d
 
 
 def main():
-    print("[START] Footballi Bot starting (Quota-Safe Chrome + 14 Multi-Playlist Edition)...")
+    print("[START] Footballi Bot starting (Strict Iranian Whitelist + Auto-Cleanup Edition)...")
     state = load_state()
     reset_key = get_tehran_reset_key()
 
@@ -434,7 +478,12 @@ def main():
     seen_mp4s = set(state.get("seen_mp4s", []))
     channel_norm_titles = {normalize_persian(t).lower() for t in state.get("uploaded_titles", [])}
 
-    # ۱. اسکن سایت فوتبالی با مرورگر کروم (کاملاً رایگان و بدون مصرف سهمیه یوتیوب)
+    # ۱. پاکسازی فوری صف فعلی با لیست سفید ایران قبل از هر کاری
+    state["pending_queue"] = deduplicate_queue(
+        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
+    )
+
+    # ۲. اسکن سایت فوتبالی با مرورگر کروم
     new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
     for item in new_web_videos:
         item["category"] = detect_primary_category(
@@ -449,9 +498,8 @@ def main():
     state["pending_queue"].sort(key=lambda x: priority_order.get(x.get("category", "VIDEO"), 5))
     save_state(state)
 
-    print(f"[QUEUE] {len(state['pending_queue'])} unique verified videos ready in Pending Queue.")
+    print(f"[QUEUE] {len(state['pending_queue'])} strictly domestic Iranian videos ready in Pending Queue.")
 
-    # ۲. بررسی اینکه آیا سهمیه ۱۰,۰۰۰ واحدی امروز گوگل کلود تمام شده است یا خیر
     if state.get("quota_exhausted_date") == reset_key:
         print("⏸️ [QUOTA-GUARD] Daily YouTube API quota is full for today. Holding queue safely until 11:30 AM Tehran reset.")
         return
@@ -461,6 +509,9 @@ def main():
     if state.get("quota_exhausted_date") == reset_key:
         save_state(state)
         return
+
+    # ۳. حذف خودکار هرگونه ویدیوی خارجی آپلودشده از روی کانال (مثل شالکه - لایپزیش)
+    channel_videos = purge_foreign_videos_from_channel(youtube, channel_videos)
 
     for v in channel_videos:
         channel_norm_titles.add(normalize_persian(v["title"]).lower())
@@ -480,14 +531,29 @@ def main():
         print("[DONE] No videos in queue to upload right now.")
         return
 
-    # ۳. بررسی کول‌داون ۳ ساعته در صورت پر بودن سقف آپلود ۲۴ ساعته کانال (جلوگیری از سوختن ۱۶۰۰ واحد در هر ۱۵ دقیقه!)
     cooldown_until = float(state.get("upload_limit_cooldown_until", 0))
     if time.time() < cooldown_until:
         rem_min = (cooldown_until - time.time()) / 60.0
-        print(f"🛡️ [QUOTA-SHIELD] Channel 24h upload cap active. Pausing upload attempts for {rem_min:.0f}m to preserve API quota for comments.")
+        print(f"🛡️ [QUOTA-SHIELD] Channel 24h upload cap active. Pausing upload attempts for {rem_min:.0f}m to preserve API quota.")
         return
 
-    candidate = state["pending_queue"][0]
+    # ۴. انتخاب اولین ویدیوی مجاز و ممیزی نهایی کپی‌رایت
+    candidate = None
+    while state["pending_queue"]:
+        top = state["pending_queue"][0]
+        if not call_ai_copyright_audit(top["title"], top.get("description", "")):
+            print(f"🚫 [AI-AUDIT-REJECT] Blocked unsafe video before upload: {top['title']}")
+            state["pending_queue"].pop(0)
+            state["uploaded_urls"].append(top["url"])
+            continue
+        candidate = top
+        break
+
+    save_state(state)
+    if not candidate:
+        print("[DONE] No safe domestic videos left in queue.")
+        return
+
     cat = candidate.get("category", "VIDEO")
     mins_since_last = (time.time() - float(state.get("last_upload_timestamp", 0))) / 60.0
 
@@ -601,7 +667,6 @@ def main():
         err_str = str(e)
         print(f" YouTube API Upload error: {e}")
         if "uploadLimitExceeded" in err_str:
-            # قفل ۳ ساعته روی تلاش آپلود تا ۱۶۰۰ واحد سهمیه در هر ۱۵ دقیقه نسوزد!
             state["upload_limit_cooldown_until"] = time.time() + (3 * 3600)
             print("🛡️ [QUOTA-SHIELD] Channel 24h upload limit active! Pausing upload retries for 3 hours to save API quota.")
             save_state(state)
