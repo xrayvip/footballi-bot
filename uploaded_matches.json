@@ -322,7 +322,8 @@
     "https://footballi.net/video/1074431/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%AF%D8%B1%D8%A8%DB%8C-%DA%AF%DB%8C%D9%84%D8%A7%D9%86-%DA%86%D9%88%DA%A9%D8%A7-%D8%AA%D8%A7%D9%84%D8%B4-1-1-%D8%AF%D8%A7%D9%85%D8%A7%D8%B4-%DA%AF%DB%8C%D9%84%D8%A7%D9%86",
     "https://footballi.net/video/1072734/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%B4%D9%85%D8%B3-%D8%A2%D8%B0%D8%B1-%D9%82%D8%B2%D9%88%DB%8C%D9%86-0-1-%D8%B5%D9%86%D8%B9%D8%AA-%D9%86%D9%81%D8%AA-%D8%A2%D8%A8%D8%A7%D8%AF%D8%A7%D9%86",
     "https://footballi.net/video/1073280/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D9%BE%DB%8C%DA%A9%D8%A7%D9%86-1-1-%D9%86%D8%B3%D8%A7%D8%AC%DB%8C-%D9%85%D8%A7%D8%B2%D9%86%D8%AF%D8%B1%D8%A7%D9%86",
-    "https://footballi.net/video/1072528/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%A2%D8%B1%DA%A9%D8%A7%D8%AF%D8%A7%D8%BA-1-0-%DA%AF%D9%84-%DA%AF%D9%87%D8%B1-%D8%B3%DB%8C%D8%B1%D8%AC%D8%A7%D9%86"
+    "https://footballi.net/video/1072528/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%A2%D8%B1%DA%A9%D8%A7%D8%AF%D8%A7%D8%BA-1-0-%DA%AF%D9%84-%DA%AF%D9%87%D8%B1-%D8%B3%DB%8C%D8%B1%D8%AC%D8%A7%D9%86",
+    "https://footballi.net/video/1069272/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%AF%D9%84-%DA%AF%D9%87%D8%B1-%D8%B3%DB%8C%D8%B1%D8%AC%D8%A7%D9%86-0-1-%D8%AE%DB%8C%D8%A8%D8%B1-%D8%AE%D8%B1%D9%85-%D8%A2%D8%A8%D8%A7%D8%AF"
   ],
   "uploaded_titles": [
     "خلاصه و حواشی بازی استقلال 5-1 آلومینیوم اراک",
@@ -445,7 +446,8 @@
     "چوکا تالش 1-1 داماش گیلان (خلاصه بازی دربی گیلان) | خلاصه بازی",
     "خلاصه بازی شمس آذر قزوین 0-1 صنعت نفت آبادان | خلاصه بازی",
     "خلاصه بازی پیکان 1-1 نساجی مازندران | خلاصه بازی",
-    "خلاصه بازی آرکاداغ 1-0  گل گهر سیرجان | خلاصه بازی"
+    "خلاصه بازی آرکاداغ 1-0  گل گهر سیرجان | خلاصه بازی",
+    "خلاصه بازی گل گهر سیرجان 0-1 خیبر خرم آباد | خلاصه بازی"
   ],
   "last_apify_run": 1794461460.4437513,
   "unblocked_v2": true,
@@ -482,16 +484,6 @@
   ],
   "unblocked_v3": true,
   "pending_queue": [
-    {
-      "url": "https://footballi.net/video/1069272/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%AF%D9%84-%DA%AF%D9%87%D8%B1-%D8%B3%DB%8C%D8%B1%D8%AC%D8%A7%D9%86-0-1-%D8%AE%DB%8C%D8%A8%D8%B1-%D8%AE%D8%B1%D9%85-%D8%A2%D8%A8%D8%A7%D8%AF",
-      "title": "خلاصه بازی گل گهر سیرجان 0-1 خیبر خرم آباد",
-      "description": "ویدئوهای جذاب ورزشی و فوتبالی هر روز همینجا | خلاصه بازی,خلاصه بازی لیگ برتر,گل‌گهر سیرجان,گل گهر,خیبر خرم آباد",
-      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/23/tus-bc564392-d38f-4de2-a436-6a5c0c5e4048.mp4",
-      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/23/17927680591008.jpeg",
-      "source": "footballi_web",
-      "is_short": false,
-      "category": "SUMMARY"
-    },
     {
       "url": "https://footballi.net/video/1068339/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-1-0-%DA%AF%D9%84-%DA%AF%D9%87%D8%B1-%D8%B3%DB%8C%D8%B1%D8%AC%D8%A7%D9%86",
       "title": "خلاصه بازی استقلال 1-0 گل گهر سیرجان",
@@ -3721,6 +3713,26 @@
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074719/%DA%AF%D9%84-%D8%AF%D9%87%D9%85-%D9%86%D9%88%D8%AC%D9%88%D8%A7%D9%86%D8%A7%D9%86-%D8%A7%DB%8C%D8%B1%D8%A7%D9%86-%D8%A8%D9%87-%D8%B3%D8%B1%DB%8C%D9%84%D8%A7%D9%86%DA%A9%D8%A7-%D9%BE%D9%88%DA%A9%D8%B1-%D8%A7%D9%85%DB%8C%D8%B1%D9%85%D8%AD%D9%85%D8%AF-%D8%B2%D8%A7%D8%B1%D8%B9%DB%8C",
+      "title": "گل دهم نوجوانان ایران به سریلانکا (پوکر امیرمحمد زارعی)",
+      "description": "خلاصه بازی های مهم اروپایی، جهانی و ایران را در وب سایت فوتبالی دنبال کنید | امیرمحمد زارعی,سریلانکا,تیم ملی نوجوانان",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-632f890a-75b7-4254-befa-2447af278bc6.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946520463968.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074717/%DA%AF%D9%84-%D9%86%D9%87%D9%85-%D9%86%D9%88%D8%AC%D9%88%D8%A7%D9%86%D8%A7%D9%86-%D8%A7%DB%8C%D8%B1%D8%A7%D9%86-%D8%A8%D9%87-%D8%B3%D8%B1%DB%8C%D9%84%D8%A7%D9%86%DA%A9%D8%A7-%D8%A7%D9%85%DB%8C%D8%B1%D8%B3%D8%A7%D9%85-%D8%B9%D9%84%DB%8C%D9%BE%D9%88%D8%B1",
+      "title": "گل نهم نوجوانان ایران به سریلانکا (امیرسام علیپور)",
+      "description": "حواشی جنجالی فوتبالی قبل و بعد از بازی ها را در سایت فوتبالی مشاهده کنید | امیرسام علیپور,تیم ملی نوجوانان,سریلانکا",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-ee95bf9d-e7ce-47ce-9833-98eecef2dfe5.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946517488028.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
     }
   ],
   "organized_playlist_vids": [
@@ -3981,13 +3993,14 @@
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-f297888c-1756-429a-ac5c-c6958448aeda.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/05/tus-ee6012ad-98c0-41e0-b9ea-f565edab90e4.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/07/tus-69193a98-5ac5-448b-b81e-efbfc2c2b39b.mp4",
-    "https://vod.cdnboks.com/foot/upload/videos/2026/11/04/tus-171859da-15b9-4283-8f21-d587b5d49cc6.mp4"
+    "https://vod.cdnboks.com/foot/upload/videos/2026/11/04/tus-171859da-15b9-4283-8f21-d587b5d49cc6.mp4",
+    "https://vod.cdnboks.com/foot/upload/videos/2026/10/23/tus-bc564392-d38f-4de2-a436-6a5c0c5e4048.mp4"
   ],
   "daily_uploads": {
     "date": "2026-11-14",
-    "count": 5
+    "count": 6
   },
-  "last_upload_timestamp": 1794650580.6727304,
+  "last_upload_timestamp": 1794652365.1578796,
   "last_apify_check": 0,
   "playlists": {
     "SUMMARY": "PLc20gneNt7W0",
@@ -4333,6 +4346,9 @@
       "SUMMARY"
     ],
     "07_MWbrK5Eo": [
+      "SUMMARY"
+    ],
+    "JKMJ4pGl8n4": [
       "SUMMARY"
     ]
   },
