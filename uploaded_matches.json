@@ -806,6 +806,17 @@
       "is_short": false,
       "category": "VIDEO",
       "video_id": 1074525
+    },
+    {
+      "video_id": 1074513,
+      "url": "https://footballi.net/video/1074513/%D8%B5%D8%AD%D8%A8%D8%AA-%D9%87%D8%A7%DB%8C-%D9%85%D8%AD%D9%85%D8%AF-%D9%86%D8%B5%D8%B1%D8%AA%DB%8C-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D8%AC%D9%86%D8%AC%D8%A7%D9%84-%D8%A7%D9%85%DB%8C%D8%B1%D8%AD%D8%B3%DB%8C%D9%86-%D9%85%D8%AD%D9%85%D9%88%D8%AF%DB%8C-%D8%AF%D8%B1-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
+      "title": "صحبت های محمد نصرتی درباره جنجال امیرحسین محمودی در پرسپولیس",
+      "description": "حواشی مراسم تجلیل از ابراهیم تهامی با حضور پیشکسوتان تیم ملی و پیشکسوتان استقلال خوزستان را به صورت اختصاصی در فوتبالی مشاهده کنید",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-82a9715a-0a7c-464e-9120-fcd9f699854a.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945755814555.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
     }
   ],
   "organized_playlist_vids": [
@@ -1441,5 +1452,5 @@
     "Ugz_-NosHp-bXis5K6R4AaABAg",
     "UgwCAcPvVRxAwbDwXvN4AaABAg"
   ],
-  "max_seen_video_id": 1074735
+  "max_seen_video_id": 1074737
 }
