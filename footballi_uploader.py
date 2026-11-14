@@ -27,6 +27,9 @@ from scrapers import (
     crawl_footballi_videos,
     normalize_persian,
     is_foreign_or_blacklisted,
+    is_video_too_old,
+    extract_numeric_id,
+    MIN_ABSOLUTE_VIDEO_ID,
 )
 import ai_seo
 import media_utils
@@ -35,6 +38,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
+
+# حداکثر ظرفیت صف (نگهداری فقط ۳۰ ویدیوی داغ و تازه روز)
+MAX_FRESH_QUEUE_SIZE = 30
 
 
 def get_tehran_reset_key() -> str:
@@ -52,6 +58,7 @@ def load_state() -> dict:
         "last_upload_timestamp": 0,
         "upload_limit_cooldown_until": 0,
         "quota_exhausted_date": "",
+        "max_seen_video_id": MIN_ABSOLUTE_VIDEO_ID,
         "last_apify_check": 0,
         "playlists": {},
         "playlist_assignments": {},
@@ -337,6 +344,8 @@ def normalize_queue_item(item: dict) -> dict:
     title = re.sub(r"\s*\|\s*خلاصه بازی\s*$", "", title).strip()
     poster = item.get("poster_url") or item.get("poster") or item.get("thumbnail") or ""
     is_short = bool(item.get("is_short", False))
+    vid_id = extract_numeric_id(u)
+    item["video_id"] = vid_id
     item["url"] = u
     item["mp4_url"] = mp4
     item["title"] = title
@@ -345,23 +354,36 @@ def normalize_queue_item(item: dict) -> dict:
     return item
 
 
-def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_norm_titles: set) -> list:
+def deduplicate_and_purge_old_queue(
+    queue: list, uploaded_urls: set, seen_mp4s: set, channel_norm_titles: set, max_site_id: int
+) -> list:
+    """
+    حذف ویدیوهای تکراری، خارجی و قدیمی (بیش از ۴۸ ساعت قبل) از صف
+    و مرتب‌سازی از جدیدترین ویدیو به قدیم
+    """
     clean = []
     q_urls = set()
     q_mp4s = set()
     q_titles = set()
-    purged_count = 0
+    purged_old_or_foreign = 0
+
+    all_q_ids = [extract_numeric_id(it.get("url", "")) for it in queue if isinstance(it, dict)]
+    highest_id = max([max_site_id, MIN_ABSOLUTE_VIDEO_ID] + all_q_ids)
 
     for raw_item in queue:
         item = normalize_queue_item(raw_item)
         u = item.get("url", "")
         mp4 = item.get("mp4_url", "")
         t = normalize_persian(item.get("title", "")).lower()
+        vid_id = item.get("video_id", 0)
 
         if not u or not mp4 or not t:
             continue
+        if is_video_too_old(item.get("title", ""), "", video_id=vid_id, max_site_id=highest_id):
+            purged_old_or_foreign += 1
+            continue
         if is_foreign_or_blacklisted(item.get("title", ""), ""):
-            purged_count += 1
+            purged_old_or_foreign += 1
             continue
         if u in uploaded_urls or u in q_urls or mp4 in q_mp4s or t in q_titles or t in channel_norm_titles:
             continue
@@ -371,9 +393,18 @@ def deduplicate_queue(queue: list, uploaded_urls: set, seen_mp4s: set, channel_n
         q_titles.add(t)
         clean.append(item)
 
-    if purged_count > 0:
-        print(f"🧹 [QUEUE-PURGE] Removed {purged_count} non-domestic/foreign videos from Pending Queue!")
-    return clean
+    if purged_old_or_foreign > 0:
+        print(f"🧹 [QUEUE-PURGE] Removed {purged_old_or_foreign} old (>48h) or foreign videos from Pending Queue!")
+
+    # مرتب‌سازی بر اساس اولویت دسته و سپس جدیدترین شماره ویدیو (Newest First)
+    priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
+    clean.sort(
+        key=lambda x: (
+            priority_order.get(x.get("category", "VIDEO"), 5),
+            -int(x.get("video_id", 0)),
+        )
+    )
+    return clean[:MAX_FRESH_QUEUE_SIZE]
 
 
 def call_ai_copyright_audit(title: str, desc: str) -> bool:
@@ -443,7 +474,7 @@ def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> d
 
 
 def main():
-    print("[START] Footballi Bot starting (Strict Iranian Match Whitelist + Safe Shows Edition)...")
+    print("[START] Footballi Bot starting (Fresh <48h Only + Newest-First Edition)...")
     state = load_state()
     reset_key = get_tehran_reset_key()
 
@@ -455,10 +486,7 @@ def main():
     seen_mp4s = set(state.get("seen_mp4s", []))
     channel_norm_titles = {normalize_persian(t).lower() for t in state.get("uploaded_titles", [])}
 
-    state["pending_queue"] = deduplicate_queue(
-        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
-    )
-
+    # ۱. اسکن ویدیوهای داغ روز سایت فوتبالی و به‌روزرسانی بالاترین شماره سریال سایت
     new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
     for item in new_web_videos:
         item["category"] = detect_primary_category(
@@ -466,14 +494,13 @@ def main():
         )
         state["pending_queue"].append(item)
 
-    state["pending_queue"] = deduplicate_queue(
-        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles
+    max_site_id = int(state.get("max_seen_video_id", MIN_ABSOLUTE_VIDEO_ID))
+    state["pending_queue"] = deduplicate_and_purge_old_queue(
+        state.get("pending_queue", []), uploaded_urls, seen_mp4s, channel_norm_titles, max_site_id
     )
-    priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
-    state["pending_queue"].sort(key=lambda x: priority_order.get(x.get("category", "VIDEO"), 5))
     save_state(state)
 
-    print(f"[QUEUE] {len(state['pending_queue'])} strictly domestic Iranian videos ready in Pending Queue.")
+    print(f"[QUEUE] {len(state['pending_queue'])} fresh (<48h) domestic Iranian videos ready in Pending Queue.")
 
     if state.get("quota_exhausted_date") == reset_key:
         print("⏸️ [QUOTA-GUARD] Daily YouTube API quota is full for today. Holding queue safely until 11:30 AM Tehran reset.")
@@ -500,7 +527,7 @@ def main():
     save_state(state)
 
     if not state["pending_queue"]:
-        print("[DONE] No videos in queue to upload right now.")
+        print("[DONE] No fresh videos in queue to upload right now.")
         return
 
     cooldown_until = float(state.get("upload_limit_cooldown_until", 0))
@@ -585,7 +612,7 @@ def main():
     final_desc = seo.get("description", candidate.get("description", ""))
     final_tags = seo.get("tags", ["فوتبالی", "فوتبال ایران"])
 
-    print(f"[UPLOAD] Publishing 1 video ({cat}): {final_title}")
+    print(f"[UPLOAD] Publishing 1 video ({cat} | ID: {candidate.get('video_id')}): {final_title}")
 
     try:
         body = {
@@ -632,7 +659,7 @@ def main():
         state["last_upload_timestamp"] = time.time()
         state["upload_limit_cooldown_until"] = 0
         save_state(state)
-        print(f"[DONE] Uploaded: 1 | Unique videos waiting in Queue: {len(state['pending_queue'])}")
+        print(f"[DONE] Uploaded: 1 | Fresh videos waiting in Queue: {len(state['pending_queue'])}")
 
     except HttpError as e:
         err_str = str(e)
