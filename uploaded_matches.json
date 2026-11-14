@@ -498,6 +498,17 @@
   "unblocked_v3": true,
   "pending_queue": [
     {
+      "video_id": 1074780,
+      "url": "https://footballi.net/video/1074780/%D9%88%DB%8C%D8%AF%DB%8C%D9%88-%DA%A9%D8%B3%D8%AA-%D8%A8%D8%B1%D8%B1%D8%B3%DB%8C-%D9%86%D8%A7%D9%87%D9%86%D8%AC%D8%A7%D8%B1%DB%8C-%D8%AF%D8%B1-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84-%D8%A7%DB%8C%D8%B1%D8%A7%D9%86-%D8%A7%D8%B2-%DA%A9%D8%B4%D8%A7%D9%84%D9%87-%D9%88-%D9%81%D8%AD%D8%A7%D8%B4%DB%8C-%D8%AA%D8%A7-%D8%A2%DA%AF%D9%87%DB%8C-%D9%81%D8%B1%D9%88%D8%B4-%D8%A8%D8%A7%D8%B2%DB%8C%DA%A9%D9%86-%D8%AF%D8%B1-%D8%B1%D9%88%D8%B2%D9%86%D8%A7%D9%85%D9%87",
+      "title": "ویدیو کست/ بررسی ناهنجاری در فوتبال ایران؛ از کشاله و فحاشی تا آگهی فروش بازیکن در روزنامه!",
+      "description": "در این قسمت از برنامه ویدیو کست با محمدعلی منصوری جوزانی روانشناس ورزشی درباره افزایش ناهنجاری ها در فوتبال ایران صحبت کردیم.",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-434f0b7a-7de4-41ca-a6fc-d06b0eebc241.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946686516370.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEOCAST"
+    },
+    {
       "video_id": 1074774,
       "url": "https://footballi.net/video/1074774/%D9%88%D8%A7%DA%A9%D9%86%D8%B4-%D9%85%D8%AF%DB%8C%D8%B1%D8%B9%D8%A7%D9%85%D9%84-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%A8%D9%87-%D8%A2%DA%AF%D9%87%DB%8C-%D9%81%D8%B1%D9%88%D8%B4-%D8%A8%D8%A7%D8%B2%DB%8C%DA%A9%D9%86-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
       "title": "واکنش مدیرعامل استقلال به آگهی فروش بازیکن پرسپولیس",
@@ -812,17 +823,6 @@
       "description": "حواشی مراسم تجلیل از ابراهیم تهامی با حضور پیشکسوتان تیم ملی و پیشکسوتان استقلال خوزستان را به صورت اختصاصی در فوتبالی مشاهده کنید",
       "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-d99f2749-2cb2-4adb-986e-7e89600e0859.mp4",
       "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945693748323.jpeg",
-      "source": "footballi_web",
-      "is_short": false,
-      "category": "VIDEO"
-    },
-    {
-      "video_id": 1074483,
-      "url": "https://footballi.net/video/1074483/%D8%A7%D8%B3%D8%AA%DB%8C%D9%84%DB%8C-%D8%AD%DB%8C%D9%81-%D8%A7%D8%B3%D8%AA-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3-%D9%85%D8%AD%D9%85%D9%88%D8%AF%DB%8C-%D8%B1%D8%A7-%D8%A7%D8%B2-%D8%AF%D8%B3%D8%AA-%D8%A8%D8%AF%D9%87%D8%AF",
-      "title": "استیلی: حیف است پرسپولیس محمودی را از دست بدهد",
-      "description": "بخش اول صحبتهای حمید استیلی در مراسم تجلیل از ابراهیم تهامی و بازی دوستانه پیشکسوتان تیم ملی با پیشکسوتان استقلال خوزستان",
-      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-2061735e-4a69-4125-9e98-cfe75ef14566.mp4",
-      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945668853579.jpeg",
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
@@ -1474,5 +1474,5 @@
     "UgwCAcPvVRxAwbDwXvN4AaABAg",
     "Ugz_-NosHp-bXis5K6R4AaABAg"
   ],
-  "max_seen_video_id": 1074774
+  "max_seen_video_id": 1074780
 }
