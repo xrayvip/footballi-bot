@@ -4,6 +4,7 @@ import re
 import json
 import time
 import inspect
+import subprocess
 from datetime import datetime, timezone, timedelta
 
 from google.oauth2.credentials import Credentials
@@ -39,8 +40,32 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
-# حداکثر ظرفیت صف (نگهداری فقط ۳۰ ویدیوی داغ و تازه روز)
 MAX_FRESH_QUEUE_SIZE = 30
+MIN_HORIZONTAL_DURATION_SECONDS = 180  # حداقل ۳ دقیقه برای ویدیوهای افقی
+
+
+def get_exact_video_dimensions(video_path: str) -> tuple:
+    """
+    خواندن دقیق عرض، ارتفاع و مدت‌زمان ویدیو با ffprobe
+    خروجی: (width, height, duration_seconds)
+    """
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json", video_path,
+        ]
+        out = subprocess.check_output(cmd, text=True, timeout=15)
+        data = json.loads(out)
+        streams = data.get("streams", [])
+        fmt = data.get("format", {})
+        w = int(streams[0].get("width", 0)) if streams else 0
+        h = int(streams[0].get("height", 0)) if streams else 0
+        dur = float(fmt.get("duration", 0))
+        return w, h, dur
+    except Exception as e:
+        print(f"[PROBE-WARN] Could not inspect video dimensions: {e}")
+        return 0, 0, 0
 
 
 def get_tehran_reset_key() -> str:
@@ -357,10 +382,6 @@ def normalize_queue_item(item: dict) -> dict:
 def deduplicate_and_purge_old_queue(
     queue: list, uploaded_urls: set, seen_mp4s: set, channel_norm_titles: set, max_site_id: int
 ) -> list:
-    """
-    حذف ویدیوهای تکراری، خارجی و قدیمی (بیش از ۴۸ ساعت قبل) از صف
-    و مرتب‌سازی از جدیدترین ویدیو به قدیم
-    """
     clean = []
     q_urls = set()
     q_mp4s = set()
@@ -396,7 +417,6 @@ def deduplicate_and_purge_old_queue(
     if purged_old_or_foreign > 0:
         print(f"🧹 [QUEUE-PURGE] Removed {purged_old_or_foreign} old (>48h) or foreign videos from Pending Queue!")
 
-    # مرتب‌سازی بر اساس اولویت دسته و سپس جدیدترین شماره ویدیو (Newest First)
     priority_order = {"SUMMARY": 0, "VIDEOCAST": 1, "POSHTE_KHAT": 2, "SHORTS": 3, "VIDEO": 4}
     clean.sort(
         key=lambda x: (
@@ -474,7 +494,7 @@ def call_generate_seo(title: str, desc: str, category: str, is_short: bool) -> d
 
 
 def main():
-    print("[START] Footballi Bot starting (Fresh <48h Only + Newest-First Edition)...")
+    print("[START] Footballi Bot starting (Horizontal >=3min + Vertical Shorts Gate Edition)...")
     state = load_state()
     reset_key = get_tehran_reset_key()
 
@@ -486,7 +506,6 @@ def main():
     seen_mp4s = set(state.get("seen_mp4s", []))
     channel_norm_titles = {normalize_persian(t).lower() for t in state.get("uploaded_titles", [])}
 
-    # ۱. اسکن ویدیوهای داغ روز سایت فوتبالی و به‌روزرسانی بالاترین شماره سریال سایت
     new_web_videos = crawl_footballi_videos(state, max_new_candidates=20)
     for item in new_web_videos:
         item["category"] = detect_primary_category(
@@ -536,72 +555,85 @@ def main():
         print(f"🛡️ [QUOTA-SHIELD] Channel 24h upload cap active. Pausing upload attempts for {rem_min:.0f}m to preserve API quota.")
         return
 
+    video_file = "temp_video.mp4"
+    thumb_file = "temp_thumb.jpg"
     candidate = None
+    is_short = False
+
+    # بررسی تک‌تک آیتم‌های صف تا اولین ویدیوی واجد شرایط پیدا شود
     while state["pending_queue"]:
         top = state["pending_queue"][0]
+
         if not call_ai_copyright_audit(top["title"], top.get("description", "")):
             print(f"🚫 [AI-AUDIT-REJECT] Blocked unsafe video before upload: {top['title']}")
             state["pending_queue"].pop(0)
             state["uploaded_urls"].append(top["url"])
             continue
-        candidate = top
-        break
+
+        cat_check = top.get("category", "VIDEO")
+        mins_since_last = (time.time() - float(state.get("last_upload_timestamp", 0))) / 60.0
+
+        if cat_check != "SUMMARY" and mins_since_last < MIN_MINUTES_BETWEEN_UPLOADS:
+            wait_rem = MIN_MINUTES_BETWEEN_UPLOADS - mins_since_last
+            print(f"⏳ [PACING] Waiting {wait_rem:.1f}m before next regular upload to maximize impressions.")
+            save_state(state)
+            return
+
+        if uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_SUMMARY_SLOTS) and cat_check != "SUMMARY":
+            print("[QUOTA] Remaining daily slots are reserved strictly for Match Summaries.")
+            save_state(state)
+            return
+
+        # دانلود ویدیو برای بررسی دقیق ابعاد و مدت‌زمان
+        dl_fn = getattr(media_utils, "download_file", None)
+        if dl_fn:
+            ok = dl_fn(top["mp4_url"], video_file)
+        else:
+            import requests
+            r = requests.get(top["mp4_url"], stream=True, timeout=60)
+            ok = r.status_code == 200
+            if ok:
+                with open(video_file, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+
+        if not ok or not os.path.exists(video_file):
+            print(f"[WARN] Could not download MP4: {top['mp4_url']}")
+            state["pending_queue"].pop(0)
+            continue
+
+        w, h, dur = get_exact_video_dimensions(video_file)
+        is_vertical = (h > w) if (w > 0 and h > 0) else bool(top.get("is_short", False))
+
+        if is_vertical:
+            # ویدیوی عمودی کوتاه -> به عنوان YouTube Shorts آپلود شود
+            is_short = dur <= 175 if dur > 0 else True
+            print(f"📱 [VERTICAL-SHORTS] Approved vertical video ({w}x{h}, {dur:.0f}s) for Shorts upload.")
+            candidate = top
+            break
+        else:
+            # ویدیوی افقی -> اگر کمتر از ۳ دقیقه (۱۸۰ ثانیه) بود، فوراً رد و از صف حذف شود!
+            if dur > 0 and dur < MIN_HORIZONTAL_DURATION_SECONDS:
+                print(
+                    f"⏭️ [SKIP-SHORT-HORIZONTAL] Rejected horizontal video under 3 mins "
+                    f"({w}x{h}, {dur:.0f}s < 180s): {top['title']}"
+                )
+                state["pending_queue"].pop(0)
+                state["uploaded_urls"].append(top["url"])
+                state["seen_mp4s"].append(top["mp4_url"])
+                continue
+            is_short = False
+            print(f"🎬 [HORIZONTAL-HD] Approved horizontal video ({w}x{h}, {dur:.0f}s >= 180s).")
+            candidate = top
+            break
 
     save_state(state)
     if not candidate:
-        print("[DONE] No safe domestic videos left in queue.")
+        print("[DONE] No qualifying videos (>=3m horizontal or vertical Shorts) ready in queue.")
         return
 
-    cat = candidate.get("category", "VIDEO")
-    mins_since_last = (time.time() - float(state.get("last_upload_timestamp", 0))) / 60.0
-
-    if cat != "SUMMARY" and mins_since_last < MIN_MINUTES_BETWEEN_UPLOADS:
-        wait_rem = MIN_MINUTES_BETWEEN_UPLOADS - mins_since_last
-        print(f"⏳ [PACING] Waiting {wait_rem:.1f}m before next regular upload to maximize impressions.")
-        return
-
-    if uploads_today >= (MAX_DAILY_UPLOADS - RESERVED_SUMMARY_SLOTS) and cat != "SUMMARY":
-        print("[QUOTA] Remaining daily slots are reserved strictly for Match Summaries.")
-        return
-
-    video_file = "temp_video.mp4"
-    thumb_file = "temp_thumb.jpg"
-
-    dl_fn = getattr(media_utils, "download_file", None)
-    if dl_fn:
-        ok = dl_fn(candidate["mp4_url"], video_file)
-    else:
-        import requests
-        r = requests.get(candidate["mp4_url"], stream=True, timeout=60)
-        ok = r.status_code == 200
-        if ok:
-            with open(video_file, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-
-    if not ok or not os.path.exists(video_file):
-        print(f"[WARN] Could not download MP4: {candidate['mp4_url']}")
-        state["pending_queue"].pop(0)
-        save_state(state)
-        return
-
-    is_short = candidate.get("is_short", False)
-    inspect_fn = getattr(media_utils, "inspect_video_file", None)
-    if inspect_fn:
-        info = inspect_fn(video_file)
-        if isinstance(info, dict):
-            if info.get("is_vertical") and info.get("duration", 999) <= 175:
-                is_short = True
-        elif isinstance(info, (tuple, list)) and len(info) >= 2:
-            if isinstance(info[0], bool):
-                if info[0]:
-                    is_short = True
-            elif isinstance(info[0], (int, float)) and isinstance(info[1], (int, float)):
-                w, h = info[0], info[1]
-                dur = info[2] if len(info) >= 3 else 60
-                if h > w and dur <= 175:
-                    is_short = True
+    cat = "SHORTS" if is_short else candidate.get("category", "VIDEO")
 
     thumb_to_use = None
     if not is_short:
@@ -609,6 +641,8 @@ def main():
 
     seo = call_generate_seo(candidate["title"], candidate.get("description", ""), cat, is_short)
     final_title = seo.get("title", candidate["title"])[:100]
+    if is_short and "#shorts" not in final_title.lower():
+        final_title = (final_title[:92] + " #Shorts").strip()
     final_desc = seo.get("description", candidate.get("description", ""))
     final_tags = seo.get("tags", ["فوتبالی", "فوتبال ایران"])
 
