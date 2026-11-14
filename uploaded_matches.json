@@ -509,6 +509,17 @@
       "category": "VIDEOCAST"
     },
     {
+      "video_id": 1074789,
+      "url": "https://footballi.net/video/1074789/%D8%B6%D8%B1%D8%A8%D9%87-%D8%B3%D8%B1-%D9%85%D8%AD%D9%85%D8%AF-%D9%82%D8%B1%D8%A8%D8%A7%D9%86%DB%8C-%D8%A8%D9%87-%D8%AA%DB%8C%D8%B1-%D8%AF%D8%B1%D9%88%D8%A7%D8%B2%D9%87-%D9%81%D9%84%D8%B3%D8%B7%DB%8C%D9%86-%D8%A8%D8%B1%D8%AE%D9%88%D8%B1%D8%AF-%DA%A9%D8%B1%D8%AF",
+      "title": "ضربه سر محمد قربانی به تیر دروازه فلسطین برخورد کرد",
+      "description": "با فوتبالی همراه باشید تا درجریان بروزترین ویدئوها قرار بگیرید | تیم ملی ایران,تیم ملی فلسطین,دیدار دوستانه",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-b6d7f9a1-9e19-4783-bc6e-09bf29104e2f.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946709126647.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
       "video_id": 1074774,
       "url": "https://footballi.net/video/1074774/%D9%88%D8%A7%DA%A9%D9%86%D8%B4-%D9%85%D8%AF%DB%8C%D8%B1%D8%B9%D8%A7%D9%85%D9%84-%D8%A7%D8%B3%D8%AA%D9%82%D9%84%D8%A7%D9%84-%D8%A8%D9%87-%D8%A2%DA%AF%D9%87%DB%8C-%D9%81%D8%B1%D9%88%D8%B4-%D8%A8%D8%A7%D8%B2%DB%8C%DA%A9%D9%86-%D9%BE%D8%B1%D8%B3%D9%BE%D9%88%D9%84%DB%8C%D8%B3",
       "title": "واکنش مدیرعامل استقلال به آگهی فروش بازیکن پرسپولیس",
@@ -812,17 +823,6 @@
       "description": "حواشی مراسم تجلیل از ابراهیم تهامی با حضور پیشکسوتان تیم ملی و پیشکسوتان استقلال خوزستان را به صورت اختصاصی در فوتبالی مشاهده کنید",
       "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-17b6c25e-03f8-48a1-813b-414f530dd302.mp4",
       "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945751820700.jpeg",
-      "source": "footballi_web",
-      "is_short": false,
-      "category": "VIDEO"
-    },
-    {
-      "video_id": 1074492,
-      "url": "https://footballi.net/video/1074492/%D9%88%D8%A7%DA%A9%D9%86%D8%B4-%D8%A8%D9%87%D8%AA%D8%A7%D8%B4-%D9%81%D8%B1%DB%8C%D8%A8%D8%A7-%D8%A8%D9%87-%D9%85%D8%AD%D8%B1%D9%88%D9%85%DB%8C%D8%AA-%DB%8C%D8%A7%D8%B3%D8%B1-%D8%A2%D8%B3%D8%A7%D9%86%DB%8C",
-      "title": "واکنش بهتاش فریبا به محرومیت یاسر آسانی",
-      "description": "حواشی مراسم تجلیل از ابراهیم تهامی با حضور پیشکسوتان تیم ملی و پیشکسوتان استقلال خوزستان را به صورت اختصاصی در فوتبالی مشاهده کنید",
-      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-d99f2749-2cb2-4adb-986e-7e89600e0859.mp4",
-      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945693748323.jpeg",
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
@@ -1474,5 +1474,5 @@
     "UgwCAcPvVRxAwbDwXvN4AaABAg",
     "Ugz_-NosHp-bXis5K6R4AaABAg"
   ],
-  "max_seen_video_id": 1074780
+  "max_seen_video_id": 1074789
 }
