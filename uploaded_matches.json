@@ -317,7 +317,8 @@
     "https://footballi.net/video/1074542/%DA%AF%D9%84-%D8%A7%D9%88%D9%84-%D8%A7%D9%85%D8%A7%D8%B1%D8%A7%D8%AA-%D8%A8%D9%87-%D9%87%D9%86%D8%AF%D9%88%D8%B1%D8%A7%D8%B3-%D8%AE%D9%84%DB%8C%D9%81%D9%87-%D9%85%D8%A8%D8%A7%D8%B1%DA%A9-%D8%A7%D9%84%D8%AD%D9%85%D8%AF%DB%8C",
     "https://footballi.net/video/1074393/%D8%B3%D9%86%DA%AF-%D8%AA%D9%85%D8%A7%D9%85-%D8%A7%D9%86%DA%AF%D9%84%DB%8C%D8%B3%DB%8C-%D9%87%D8%A7-%D8%A8%D8%B1%D8%A7%DB%8C-%D9%87%D8%B1%DB%8C-%DA%A9%DB%8C%D9%86-%D8%A8%D8%A7-%D8%B1%D9%88%D9%86%D9%85%D8%A7%DB%8C%DB%8C-%D8%A7%D8%B2-%D8%AA%D9%88%D9%BE-%D8%B7%D9%84%D8%A7",
     "https://footballi.net/video/1074367/%DA%AF%D9%84-%D8%B3%D9%88%D9%85-%D8%B1%D9%88%D8%B3%DB%8C%D9%87-%D8%A8%D9%87-%D8%A7%D8%B2%D8%A8%DA%A9%D8%B3%D8%AA%D8%A7%D9%86-%DA%A9%D8%A7%D9%85%D8%A8%DA%A9-%D9%85%DB%8C%D8%B1%D8%A7%D9%86%DA%86%D9%88%DA%A9",
-    "https://footballi.net/video/1074366/%DA%AF%D9%84-%D8%AF%D9%88%D9%85-%D8%B1%D9%88%D8%B3%DB%8C%D9%87-%D8%A8%D9%87-%D8%A7%D8%B2%D8%A8%DA%A9%D8%B3%D8%AA%D8%A7%D9%86-%D8%AF%D8%A8%D9%84-%DA%A9%D9%88%D9%85%D9%84%DB%8C%DA%86%D9%86%DA%A9%D9%88"
+    "https://footballi.net/video/1074366/%DA%AF%D9%84-%D8%AF%D9%88%D9%85-%D8%B1%D9%88%D8%B3%DB%8C%D9%87-%D8%A8%D9%87-%D8%A7%D8%B2%D8%A8%DA%A9%D8%B3%D8%AA%D8%A7%D9%86-%D8%AF%D8%A8%D9%84-%DA%A9%D9%88%D9%85%D9%84%DB%8C%DA%86%D9%86%DA%A9%D9%88",
+    "https://footballi.net/video/1073010/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%86%D8%A7%D8%AF%D8%B1%D9%85%D9%84%D9%88-%D8%A7%D8%B1%D8%AF%DA%A9%D8%A7%D9%86-1-1-%D9%81%D9%88%D9%84%D8%A7%D8%AF-%D8%AE%D9%88%D8%B2%D8%B3%D8%AA%D8%A7%D9%86"
   ],
   "uploaded_titles": [
     "خلاصه و حواشی بازی استقلال 5-1 آلومینیوم اراک",
@@ -435,7 +436,8 @@
     "خلاصه بازی شالکه 0-2 آربی لایپزیش | خلاصه بازی",
     "خلاصه بازی ناپولی 1-1 لاتزیو | خلاصه بازی",
     "خلاصه بازی کریستال پالاس 1-1 هوفنهایم | خلاصه بازی",
-    "خلاصه بازی فرانسه 4-1 بلژیک | خلاصه بازی"
+    "خلاصه بازی فرانسه 4-1 بلژیک | خلاصه بازی",
+    "خلاصه بازی چادرملو اردکان 1-1 فولاد خوزستان | خلاصه بازی"
   ],
   "last_apify_run": 1794461460.4437513,
   "unblocked_v2": true,
@@ -472,16 +474,6 @@
   ],
   "unblocked_v3": true,
   "pending_queue": [
-    {
-      "url": "https://footballi.net/video/1073010/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%86%D8%A7%D8%AF%D8%B1%D9%85%D9%84%D9%88-%D8%A7%D8%B1%D8%AF%DA%A9%D8%A7%D9%86-1-1-%D9%81%D9%88%D9%84%D8%A7%D8%AF-%D8%AE%D9%88%D8%B2%D8%B3%D8%AA%D8%A7%D9%86",
-      "title": "خلاصه بازی چادرملو اردکان 1-1 فولاد خوزستان",
-      "description": "بازی با نتیجه‌ای برابر به پایان رسید. چادرملو اردکان و فولاد خوزستان در جریان رقابت‌های لیگ برتر ایران در این دیدار با تساوی ۱ بر ۱ از کنار هم گذشتند.",
-      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/06/tus-653f1ad9-8607-4f54-97aa-a7dcd1f1fb6c.mp4",
-      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/06/17939814205684.jpeg",
-      "source": "footballi_web",
-      "is_short": false,
-      "category": "SUMMARY"
-    },
     {
       "url": "https://footballi.net/video/1074431/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%AF%D8%B1%D8%A8%DB%8C-%DA%AF%DB%8C%D9%84%D8%A7%D9%86-%DA%86%D9%88%DA%A9%D8%A7-%D8%AA%D8%A7%D9%84%D8%B4-1-1-%D8%AF%D8%A7%D9%85%D8%A7%D8%B4-%DA%AF%DB%8C%D9%84%D8%A7%D9%86",
       "title": "چوکا تالش 1-1 داماش گیلان (خلاصه بازی دربی گیلان)",
@@ -3531,6 +3523,86 @@
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074688/%D8%B5%D8%AD%D8%A8%D8%AA-%D9%87%D8%A7%DB%8C-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D9%88%D8%B6%D8%B9%DB%8C%D8%AA-%D9%88%D8%B1%D8%B2%D8%B4%DA%AF%D8%A7%D9%87-%D9%87%D8%A7%DB%8C-%D8%A7%DB%8C%D8%B1%D8%A7%D9%86",
+      "title": "صحبت های مهدی تاج درباره وضعیت ورزشگاه های ایران",
+      "description": "اگر بخواهیم بازی‌های آسیایی را برگزار کنیم با توجه به کیفیت ورزشگاه‌های ما فقط ورزشگاه شیراز در رده B است و بقیه در رده C  هستند که با این وضعیت دچار مشکل می شویم",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-14299518-0b7f-4d45-9e2e-19e16dbd6a61.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946430629336.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074686/%D8%B5%D8%AD%D8%A8%D8%AA-%D9%87%D8%A7%DB%8C-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D8%B5%D8%AF%D9%88%D8%B1-%D9%85%D8%AC%D9%88%D8%B2-%D8%AD%D8%B1%D9%81%D9%87-%D8%A7%DB%8C-%D8%A8%D8%A7%D8%B4%DA%AF%D8%A7%D9%87-%D9%87%D8%A7-%D9%88-%D8%AD%D9%82-%D9%BE%D8%AE%D8%B4",
+      "title": "صحبت های مهدی تاج درباره صدور مجوز حرفه ای باشگاه‌ها و حق پخش",
+      "description": "خلاصه بازی های مهم اروپایی، جهانی و ایران را در وب سایت فوتبالی دنبال کنید | مهدی تاج,فدراسیون فوتبال,مجوز حرفه‌ای",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-0f7a0f8a-1d5a-4a42-a1c4-2e5087a8198f.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946428798260.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1072128/%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%AF%D8%B1-%D9%81%D9%88%D8%AA%D8%A8%D8%A7%D9%84%D9%85%D8%A7%D9%86-%D9%85%D8%AF%DB%8C%D9%88%D9%86-%D8%A7%D9%81%D8%B1%D8%A7%D8%AF%DB%8C-%D9%85%D8%AB%D9%84-%D8%B9%D9%84%DB%8C%D8%AF%D9%88%D8%B3%D8%AA%DB%8C-%D9%87%D8%B3%D8%AA%DB%8C%D9%85",
+      "title": "مهدی تاج: در فوتبالمان مدیون افرادی مثل علیدوستی هستیم",
+      "description": "مهدی تاج رییس فدراسیون فوتبال: زنده یاد علیدوستی همیشه می‌گفت من هیچ وقت مقابل این بیماری شکست را نخواهم پذیرفت؛ ما مدیون این چنین آدم هایی در فوتبال خودمان هستیم",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/03/tus-09cd8820-629a-4feb-80bb-20ebf5f3649e.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/03/17936977254327.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1071018/%D8%A8%D8%A7%D8%B2%DA%AF%D8%B4%D8%AA-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%A7%D8%B2-%D8%B3%D9%81%D8%B1-%D8%A8%D8%A7%DA%A9%D9%88-%D8%A8%D9%87-%D8%AF%D8%B9%D9%88%D8%AA-%D9%88%DB%8C%DA%98%D9%87-%D9%81%DB%8C%D9%81%D8%A7",
+      "title": "بازگشت مهدی تاج از سفر باکو؛ به دعوت ویژه فیفا",
+      "description": "مهدی تاج، رئیس فدراسیون فوتبال جمهوری اسلامی ایران، روز پنجشنبه از طریق مرز زمینی مشترک ایران و جمهوری آذربایجان در شهرستان مرزی آستارا وارد کشور شد.در بدو ورود رئیس فدراسیون فوتبال، علی درمانی فرماندار آستارا، ولی داداشی نماینده مردم آستارا در مجلس شورای اسلامی و قربانعلی الماسخاله رئیس هیات فوتبال استان گیلان از وی استقبال کردند.مهدی تاج به دعوت فدراسیون بین‌المللی فوتبال (فیفا) و به عنوان مهمان ویژه در رقابت‌های جام جهانی نونهالان (زیر ۱۵ سال) به باکو، پایتخت جمهوری آذربایجان، سفر کرده بود.",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/30/tus-c87d2409-c13a-44f1-914e-e4c67d464d9d.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/30/17933409449988.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1070920/%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%A7%D8%B2-%D9%81%DB%8C%D9%81%D8%A7-%D8%AF%D8%B1%D8%A8%D8%A7%D8%B1%D9%87-%D9%85%DB%8C%D8%B2%D8%A8%D8%A7%D9%86%DB%8C-%D9%87%D8%A7-%D9%88-%D9%BE%D9%88%D9%84-%D9%87%D8%A7%DB%8C-%D8%A8%D9%84%D9%88%DA%A9%D9%87-%D8%B4%D8%AF%D9%87-%D8%AF%D8%B1%D8%AE%D9%88%D8%A7%D8%B3%D8%AA-%D8%AF%D8%A7%D8%B4%D8%AA%D9%87-%D8%A7%DB%8C%D9%85",
+      "title": "مهدی تاج: از فیفا درباره میزبانی ها و پول های بلوکه شده درخواست داشته ایم",
+      "description": "مهدی تاج: از فیفا درخواست رفتار منصفانه تری داشتم مخصوصا برای میزبانی ها و پول های بلوکه شده و آقای اینفانتینو قول هایی هم داده استتوضیح مهدی تاج  رییس فدراسیون فوتبال درباره درخواست هایی که از اینفانتینو و فیفا مطرح کرده است",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/29/tus-416d2d12-5a66-4668-9db7-bdb7a6449a90.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/29/17932912961984.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1070912/%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D9%85%D8%B7%D9%85%D8%A6%D9%86%D9%85-%D8%B1%D9%88%D8%B2%DB%8C-%D9%85%DB%8C-%D8%AA%D9%88%D8%A7%D9%86%DB%8C%D9%85-%D8%AF%D8%B1-%D8%B3%D8%A7%D8%AD%D9%84%DB%8C-%D8%A8%D9%87%D8%AA%D8%B1%DB%8C%D9%86-%D8%AA%DB%8C%D9%85-%D8%AF%D9%86%DB%8C%D8%A7-%D8%A8%D8%A7%D8%B4%DB%8C%D9%85",
+      "title": "مهدی تاج: مطمئنم روزی می‌توانیم در ساحلی بهترین تیم دنیا باشیم",
+      "description": "مهدی تاج معتقد است که روزی ایران می‌تواند در فوتبال ساحلی به بهترین تیم دنیا تبدیل شود. رئیس فدراسیون فوتبال در اظهاراتی اختصاصی درباره آینده تیم ملی فوتبال ساحلی ایران صحبت کرد. او از اعتماد به توانایی‌های این رشته اطمینان داشت.",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/29/tus-9d3aa38b-09a6-4d24-b455-d12d69f41406.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/29/17932903883775.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1068993/%D8%AD%D8%B6%D9%88%D8%B1-%D9%BE%D8%B3%D8%B1-%D8%AC%D9%88%D8%A7%D8%AF-%D9%86%DA%A9%D9%88%D9%86%D8%A7%D9%85-%D8%AF%D8%B1-%D9%88%D8%B1%D8%B2%D8%B4%DA%AF%D8%A7%D9%87-%DB%8C%D8%A7%D8%AF%DA%AF%D8%A7%D8%B1-%D8%A7%D9%85%D8%A7%D9%85-%D8%AA%D8%A8%D8%B1%DB%8C%D8%B2",
+      "title": "حضور پسر جواد نکونام در ورزشگاه یادگار امام تبریز",
+      "description": "حواشی جنجالی فوتبالی قبل و بعد از بازی ها را در سایت فوتبالی مشاهده کنید | ورزشگاه یادگار امام تبریز,اختصاصی,جواد نکونام,تراکتور,صنعت نفت آبادان",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/22/tus-4db02671-1720-409e-9219-abecb2ffa509.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/22/17926725802656.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1066757/%D9%88%D8%A7%DA%A9%D9%86%D8%B4-%D8%A7%D8%AD%D8%B3%D8%A7%D9%86-%D8%AD%D8%AF%D8%A7%D8%AF%DB%8C-%D8%A8%D9%87-%D8%A7%D8%AA%D9%81%D8%A7%D9%82%D8%A7%D8%AA-%D8%A8%DB%8C%D9%86-%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D9%88-%D8%B9%D9%84%DB%8C-%D8%AF%D8%A8%DB%8C%D8%B1",
+      "title": "واکنش احسان حدادی به اتفاقات بین مهدی تاج و علی دبیر",
+      "description": "واکنش احسان حدادی، رئیس فدراسیون دو و میدانی، به اتفاقات و حواشی مطرح شده میان مهدی تاج و علیرضا دبیر؛ حدادی در این گفت و گو درباره ماجراهای اخیر میان روسای فدراسیون فوتبال و کشتی صحبت کرد و به پرسش ها درباره این موضوع پاسخ داد.",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/10/13/tus-72dd7c06-db9d-4273-91b5-a5225e6a9d43.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/10/13/17919043478408.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
     }
   ],
   "organized_playlist_vids": [
@@ -3786,13 +3858,14 @@
     "https://vod.cdnboks.com/foot/upload/videos/2026/10/31/tus-3ceb82ff-1656-4dd6-bfa0-e8919e9da050.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/08/tus-3795ec1f-0f09-41ef-a1af-62f33ec8c989.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/05/tus-604be95c-584a-4b78-8637-796487c6fca7.mp4",
-    "https://vod.cdnboks.com/foot/upload/videos/2026/10/05/tus-6870058f-3ba8-4717-abcc-fb08db70be38.mp4"
+    "https://vod.cdnboks.com/foot/upload/videos/2026/10/05/tus-6870058f-3ba8-4717-abcc-fb08db70be38.mp4",
+    "https://vod.cdnboks.com/foot/upload/videos/2026/11/06/tus-653f1ad9-8607-4f54-97aa-a7dcd1f1fb6c.mp4"
   ],
   "daily_uploads": {
-    "date": "2026-11-13",
-    "count": 10
+    "date": "2026-11-14",
+    "count": 1
   },
-  "last_upload_timestamp": 1794571400.548291,
+  "last_upload_timestamp": 1794643419.377201,
   "last_apify_check": 0,
   "playlists": {
     "SUMMARY": "PLc20gneNt7W0",
@@ -4124,9 +4197,12 @@
     ],
     "uE4EXMfHkYM": [
       "SUMMARY"
+    ],
+    "vMOuPdgcQlw": [
+      "SUMMARY"
     ]
   },
-  "upload_limit_cooldown_until": 1794643364.0153205,
+  "upload_limit_cooldown_until": 0,
   "quota_exhausted_date": "2026-11-12",
   "ignored_comments": [],
   "deleted_comments": [
