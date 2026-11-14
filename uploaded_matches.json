@@ -318,7 +318,8 @@
     "https://footballi.net/video/1074393/%D8%B3%D9%86%DA%AF-%D8%AA%D9%85%D8%A7%D9%85-%D8%A7%D9%86%DA%AF%D9%84%DB%8C%D8%B3%DB%8C-%D9%87%D8%A7-%D8%A8%D8%B1%D8%A7%DB%8C-%D9%87%D8%B1%DB%8C-%DA%A9%DB%8C%D9%86-%D8%A8%D8%A7-%D8%B1%D9%88%D9%86%D9%85%D8%A7%DB%8C%DB%8C-%D8%A7%D8%B2-%D8%AA%D9%88%D9%BE-%D8%B7%D9%84%D8%A7",
     "https://footballi.net/video/1074367/%DA%AF%D9%84-%D8%B3%D9%88%D9%85-%D8%B1%D9%88%D8%B3%DB%8C%D9%87-%D8%A8%D9%87-%D8%A7%D8%B2%D8%A8%DA%A9%D8%B3%D8%AA%D8%A7%D9%86-%DA%A9%D8%A7%D9%85%D8%A8%DA%A9-%D9%85%DB%8C%D8%B1%D8%A7%D9%86%DA%86%D9%88%DA%A9",
     "https://footballi.net/video/1074366/%DA%AF%D9%84-%D8%AF%D9%88%D9%85-%D8%B1%D9%88%D8%B3%DB%8C%D9%87-%D8%A8%D9%87-%D8%A7%D8%B2%D8%A8%DA%A9%D8%B3%D8%AA%D8%A7%D9%86-%D8%AF%D8%A8%D9%84-%DA%A9%D9%88%D9%85%D9%84%DB%8C%DA%86%D9%86%DA%A9%D9%88",
-    "https://footballi.net/video/1073010/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%86%D8%A7%D8%AF%D8%B1%D9%85%D9%84%D9%88-%D8%A7%D8%B1%D8%AF%DA%A9%D8%A7%D9%86-1-1-%D9%81%D9%88%D9%84%D8%A7%D8%AF-%D8%AE%D9%88%D8%B2%D8%B3%D8%AA%D8%A7%D9%86"
+    "https://footballi.net/video/1073010/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%DA%86%D8%A7%D8%AF%D8%B1%D9%85%D9%84%D9%88-%D8%A7%D8%B1%D8%AF%DA%A9%D8%A7%D9%86-1-1-%D9%81%D9%88%D9%84%D8%A7%D8%AF-%D8%AE%D9%88%D8%B2%D8%B3%D8%AA%D8%A7%D9%86",
+    "https://footballi.net/video/1074431/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%AF%D8%B1%D8%A8%DB%8C-%DA%AF%DB%8C%D9%84%D8%A7%D9%86-%DA%86%D9%88%DA%A9%D8%A7-%D8%AA%D8%A7%D9%84%D8%B4-1-1-%D8%AF%D8%A7%D9%85%D8%A7%D8%B4-%DA%AF%DB%8C%D9%84%D8%A7%D9%86"
   ],
   "uploaded_titles": [
     "خلاصه و حواشی بازی استقلال 5-1 آلومینیوم اراک",
@@ -437,7 +438,8 @@
     "خلاصه بازی ناپولی 1-1 لاتزیو | خلاصه بازی",
     "خلاصه بازی کریستال پالاس 1-1 هوفنهایم | خلاصه بازی",
     "خلاصه بازی فرانسه 4-1 بلژیک | خلاصه بازی",
-    "خلاصه بازی چادرملو اردکان 1-1 فولاد خوزستان | خلاصه بازی"
+    "خلاصه بازی چادرملو اردکان 1-1 فولاد خوزستان | خلاصه بازی",
+    "چوکا تالش 1-1 داماش گیلان (خلاصه بازی دربی گیلان) | خلاصه بازی"
   ],
   "last_apify_run": 1794461460.4437513,
   "unblocked_v2": true,
@@ -474,16 +476,6 @@
   ],
   "unblocked_v3": true,
   "pending_queue": [
-    {
-      "url": "https://footballi.net/video/1074431/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%AF%D8%B1%D8%A8%DB%8C-%DA%AF%DB%8C%D9%84%D8%A7%D9%86-%DA%86%D9%88%DA%A9%D8%A7-%D8%AA%D8%A7%D9%84%D8%B4-1-1-%D8%AF%D8%A7%D9%85%D8%A7%D8%B4-%DA%AF%DB%8C%D9%84%D8%A7%D9%86",
-      "title": "چوکا تالش 1-1 داماش گیلان (خلاصه بازی دربی گیلان)",
-      "description": "خلاصه بازی دربی گیلان (لیگ دسته دوم)؛چوکا تالش 1-1 داماش گیلانامیرحسین‌ نوایی برای چوکا و اسماعیل شریفات برای داماش گلزنی کردند.",
-      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-f297888c-1756-429a-ac5c-c6958448aeda.mp4",
-      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/13/17945495234396.jpeg",
-      "source": "footballi_web",
-      "is_short": false,
-      "category": "SUMMARY"
-    },
     {
       "url": "https://footballi.net/video/1072734/%D8%AE%D9%84%D8%A7%D8%B5%D9%87-%D8%A8%D8%A7%D8%B2%DB%8C-%D8%B4%D9%85%D8%B3-%D8%A2%D8%B0%D8%B1-%D9%82%D8%B2%D9%88%DB%8C%D9%86-0-1-%D8%B5%D9%86%D8%B9%D8%AA-%D9%86%D9%81%D8%AA-%D8%A2%D8%A8%D8%A7%D8%AF%D8%A7%D9%86",
       "title": "خلاصه بازی شمس آذر قزوین 0-1 صنعت نفت آبادان",
@@ -3603,6 +3595,26 @@
       "source": "footballi_web",
       "is_short": false,
       "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074690/%D8%AA%D8%A7%D8%AC-%D8%A8%D8%B1%D8%AE%DB%8C-%D8%A7%D8%B2-%D8%A8%D8%A7%D8%B4%DA%AF%D8%A7%D9%87-%D9%87%D8%A7-%D8%A7%D8%B5%D9%84%D8%A7-%D8%A8%D8%B1%D8%A7%DB%8C-%D8%B5%D8%AF%D9%88%D8%B1-%D9%85%D8%AC%D9%88%D8%B2-%D8%AD%D8%B1%D9%81%D9%87-%D8%A7%DB%8C-%D8%A7%D9%82%D8%AF%D8%A7%D9%85-%D9%86%DA%A9%D8%B1%D8%AF%D9%86%D8%AF-%DA%A9%D9%87-%D8%A7%DB%8C%D9%86-%D8%AE%DB%8C%D9%84%DB%8C-%D8%A8%D8%AF-%D8%A7%D8%B3%D8%AA",
+      "title": "تاج: برخی از باشگاه‌ها اصلا برای صدور مجوز حرفه ای اقدام نکردند که این خیلی بد است",
+      "description": "با بخش ویدئو فوتبالی تمام لیگ های فوتبال جهان را به خانه بیاورید | مهدی تاج,فدراسیون فوتبال,کنفدراسیون فوتبال آسیا",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-544b15bd-20f7-4707-811e-18d48f2243a7.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946440302684.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
+    },
+    {
+      "url": "https://footballi.net/video/1074689/%D9%85%D9%87%D8%AF%DB%8C-%D8%AA%D8%A7%D8%AC-%D8%A7%D9%85%DA%A9%D8%A7%D9%86-%D8%AF%D8%A7%D8%B1%D8%AF-AFC-%D9%85%D8%AC%D9%88%D8%B2-%D8%AD%D8%B1%D9%81%D9%87-%D8%A7%DB%8C-%D8%A8%D8%A7%D8%B4%DA%AF%D8%A7%D9%87-%D9%87%D8%A7-%D8%B1%D8%A7-%D9%84%D8%BA%D9%88-%DA%A9%D9%86%D8%AF-%DA%A9%D9%87-%D8%A8%D8%B1%D8%A7%DB%8C-%DA%A9%D8%B4%D9%88%D8%B1-%D8%AE%D9%88%D8%A8-%D9%86%DB%8C%D8%B3%D8%AA",
+      "title": "مهدی تاج: امکان دارد AFC مجوز حرفه ای باشگاه‌ها را لغو کند که برای کشور خوب نیست",
+      "description": "نزدیک تر از نیمکت تیم ها به زمین مسابقه، با سایت و ویدئوهای فوتبالی | مهدی تاج,کنفدراسیون فوتبال آسیا,مجوز حرفه‌ای",
+      "mp4_url": "https://vod.cdnboks.com/foot/upload/videos/2026/11/14/tus-f4ef1d85-da50-4697-b27b-89074ee30013.mp4",
+      "poster_url": "https://cdn.oddrun.ir/news/1000/images/2026/11/14/17946436502481.jpeg",
+      "source": "footballi_web",
+      "is_short": false,
+      "category": "VIDEO"
     }
   ],
   "organized_playlist_vids": [
@@ -3859,13 +3871,14 @@
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/08/tus-3795ec1f-0f09-41ef-a1af-62f33ec8c989.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/11/05/tus-604be95c-584a-4b78-8637-796487c6fca7.mp4",
     "https://vod.cdnboks.com/foot/upload/videos/2026/10/05/tus-6870058f-3ba8-4717-abcc-fb08db70be38.mp4",
-    "https://vod.cdnboks.com/foot/upload/videos/2026/11/06/tus-653f1ad9-8607-4f54-97aa-a7dcd1f1fb6c.mp4"
+    "https://vod.cdnboks.com/foot/upload/videos/2026/11/06/tus-653f1ad9-8607-4f54-97aa-a7dcd1f1fb6c.mp4",
+    "https://vod.cdnboks.com/foot/upload/videos/2026/11/13/tus-f297888c-1756-429a-ac5c-c6958448aeda.mp4"
   ],
   "daily_uploads": {
     "date": "2026-11-14",
-    "count": 1
+    "count": 2
   },
-  "last_upload_timestamp": 1794643419.377201,
+  "last_upload_timestamp": 1794645207.645871,
   "last_apify_check": 0,
   "playlists": {
     "SUMMARY": "PLc20gneNt7W0",
@@ -4199,6 +4212,9 @@
       "SUMMARY"
     ],
     "vMOuPdgcQlw": [
+      "SUMMARY"
+    ],
+    "IlsPqUzSLig": [
       "SUMMARY"
     ]
   },
