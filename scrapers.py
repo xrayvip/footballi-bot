@@ -18,16 +18,29 @@ from config import (
     IRANIAN_FOOTBALL_ENTITIES,
 )
 
+# حداکثر اختلاف شماره سریال ویدیو نسبت به جدیدترین ویدیوی سایت (حدود ۳۶ تا ۴۸ ساعت اخیر)
+MAX_VIDEO_ID_AGE_GAP = 650
+MIN_ABSOLUTE_VIDEO_ID = 1073500
+
 
 def normalize_persian(text: str) -> str:
     if not text:
         return ""
     text = re.sub(r"[\u064B-\u065F\u0670]", "", text)
     text = text.replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ")
+    # تبدیل اعداد فارسی و عربی به انگلیسی برای بررسی دقیق تاریخ
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    for i in range(10):
+        text = text.replace(persian_digits[i], str(i)).replace(arabic_digits[i], str(i))
     return re.sub(r"\s+", " ", text).strip()
 
 
-# لیست گسترده چهره‌ها، لژیونرها و پیشکسوتان فوتبال ایران
+def extract_numeric_id(url: str) -> int:
+    m = re.search(r"/video/(\d+)", str(url))
+    return int(m.group(1)) if m else 0
+
+
 EXTENDED_IRANIAN_FIGURES = IRANIAN_FOOTBALL_ENTITIES + [
     "قلی زاده", "قلی‌زاده", "صیادمنش", "سردار آزمون", "طارمی", "جهانبخش", "قایدی",
     "قدوس", "محبی", "عزت اللهی", "عزت‌اللهی", "کنعانی", "شجاع", "بیرانوند", "نیازمند",
@@ -43,12 +56,43 @@ EXTENDED_IRANIAN_FIGURES = IRANIAN_FOOTBALL_ENTITIES + [
     "منصوریان", "مظلومی", "درخشان", "پیروانی", "پروین", "دایی", "کریمی", "مجیدی",
     "باقری", "برومند", "رافت", "سامره", "بیک زاده", "ابوالقاسم پور", "فتاحی",
     "ویسی", "جلالی", "آشوبی", "مسلمان", "جمشیدی", "علیدوستی", "شمسایی", "تهامی",
-    "عمران زاده", "پنجعلی", "بیانی", "اسفندیارپور", "پیشکسوتان", "جام ملتها", "جام ملت ها",
+    "عمران زاده", "پنجعلی", "بیانی", "اسفندیارپور", "پیشکسوتان",
 ]
 
 
+def is_video_too_old(title: str, page_text_sample: str = "", video_id: int = 0, max_site_id: int = 0) -> bool:
+    """
+    بررسی دقیق تاریخ و قدمت ویدیو:
+    فقط ویدیوهای ۲۴ تا ۴۸ ساعت اخیر مجاز هستند و ویدیوهای قدیمی‌تر فوراً رد می‌شوند.
+    """
+    # ۱. بررسی بر اساس شماره سریال افزایشی سایت فوتبالی
+    if video_id > 0:
+        if video_id < MIN_ABSOLUTE_VIDEO_ID:
+            return True
+        if max_site_id > MIN_ABSOLUTE_VIDEO_ID and (max_site_id - video_id) > MAX_VIDEO_ID_AGE_GAP:
+            return True
+
+    norm_t = normalize_persian(title).lower()
+    norm_page = normalize_persian(page_text_sample).lower()
+
+    # ۲. سال‌های قدیمی در عنوان
+    old_years = ["1398", "1399", "1400", "1401", "1402", "1403", "1404", "2020", "2021", "2022", "2023", "2024", "2025"]
+    for y in old_years:
+        if y in norm_t:
+            return True
+
+    # ۳. بررسی عبارت زمان انتشار در بالای صفحه ویدیو («هفته پیش»، «ماه پیش»، «سال پیش»، یا بیش از ۲ روز پیش)
+    if any(old_unit in norm_page for old_unit in ["هفته پیش", "ماه پیش", "سال پیش"]):
+        return True
+
+    m_days = re.search(r"(\d+)\s*روز پیش", norm_page)
+    if m_days and int(m_days.group(1)) > 2:
+        return True
+
+    return False
+
+
 def is_match_broadcast_footage(norm_title: str) -> bool:
-    """تشخیص اینکه آیا ویدیو تصویر مسابقه/گل/خلاصه بازی است (که کپی‌رایت دارد) یا مصاحبه/برنامه"""
     match_words = [
         "خلاصه بازی", "خلاصه دیدار", "خلاصه مسابقه", "هایلایت بازی", "بازی کامل",
         "گل اول", "گل دوم", "گل سوم", "گل چهارم", "گل پنجم", "گل های بازی",
@@ -59,17 +103,12 @@ def is_match_broadcast_footage(norm_title: str) -> bool:
 
 
 def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
-    """
-    قفل هوشمند کپی‌رایت:
-    ۱. اگر ویدیو «خلاصه بازی / گل بازی / هایلایت بازی» است:
-       حتماً باید نام حداقل یکی از باشگاه‌های داخلی ایران در عنوان باشد و هیچ تیم/کشور خارجی در عنوان نباشد.
-    ۲. اگر ویدیو «مصاحبه / برنامه اختصاصی / صحبت پیشکسوتان و لژیونرها» است:
-       تا زمانی که مربوط به چهره‌ها، لژیونرها یا فوتبال ایران باشد (مثل مصاحبه قلی‌زاده درباره صیادمنش)، کاملاً مجاز است.
-    """
     clean_title = re.sub(r"\|.*$", "", title).strip()
     norm_title = normalize_persian(clean_title).lower()
 
-    # ۱. قانون سخت‌گیرانه برای ویدیوهای مسابقه (خلاصه بازی و گل‌ها):
+    if is_video_too_old(clean_title):
+        return True
+
     if is_match_broadcast_footage(norm_title):
         for bad_word in FOREIGN_BLACKLIST:
             if normalize_persian(bad_word).lower() in norm_title:
@@ -77,13 +116,10 @@ def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
         has_iranian_club = any(normalize_persian(club).lower() in norm_title for club in IRANIAN_DOMESTIC_CLUBS)
         return not has_iranian_club
 
-    # ۲. برای برنامه‌های گفتگو محور، مصاحبه‌ها و اخبار:
     is_safe_show = any(normalize_persian(s).lower() in norm_title for s in IRANIAN_SAFE_SHOWS)
     has_iranian_figure = any(normalize_persian(e).lower() in norm_title for e in EXTENDED_IRANIAN_FIGURES)
 
-    # اگر نام چهره/لژیونر/تیم ایرانی یا برنامه اختصاصی در عنوان هست، حتی اگر در مصاحبه‌اش نام تیم خارجی (مثل لخ پوزنان) را بیاورد مجاز است!
     if is_safe_show or has_iranian_figure:
-        # فقط اگر کل ویدیو گل‌ها/مهارت‌های یک ستاره خارجی بدون ارتباط با ایران باشد رد شود
         pure_foreign_clip_words = [
             "گلها و مهارتهای", "تکنیک و گلهای", "دروازه بانی کایل واکر",
             "کاشته های برتر بوندسلیگا", "دریبل های تماشایی لالیگا",
@@ -93,12 +129,10 @@ def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
             return True
         return False
 
-    # ۳. اگر نام ستاره یا باشگاه خارجی در عنوان است و هیچ ربطی به ایران ندارد -> رد شود
     for bad_word in FOREIGN_BLACKLIST:
         if normalize_persian(bad_word).lower() in norm_title:
             return True
 
-    # ۴. کلیپ‌های وایرال و سرگرمی خارجی بدون نام ایرانی -> رد شود
     foreign_viral_patterns = [
         "دیوانه وارترین", "تحقیرآمیزترین", "باورنکردنی ترین", "عجیب ترین و خنده دارترین",
         "بهترین گل های لحظه آخری تاریخ", "گل های کاملاً تحقیرآمیز", "یک در میلیارد",
@@ -108,7 +142,6 @@ def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
     if any(normalize_persian(fp).lower() in norm_title for fp in foreign_viral_patterns):
         return True
 
-    # ۵. اگر ساختار مصاحبه فارسی دارد («نام شخص: متن صحبت» درباره لیگ/تیم ملی/داوری/فوتبال) مجاز است
     if ":" in clean_title and any(
         w in norm_title for w in ["لیگ", "تیم ملی", "فوتبال", "داور", "بازیکن", "مربی", "جام", "باشگاه", "استادیوم", "هوادار"]
     ):
@@ -118,10 +151,6 @@ def is_foreign_or_blacklisted(title: str, desc: str = "") -> bool:
 
 
 def ai_batch_verify_borderline_titles(candidates: list) -> list:
-    """
-    بررسی تکمیلی با هوش مصنوعی برای اینکه هیچ مصاحبه ایرانی (حتی با نام‌های جدید) جا نماند
-    و هیچ کلیپ خارجی وارد صف نشود
-    """
     if not candidates:
         return []
 
@@ -135,7 +164,6 @@ def ai_batch_verify_borderline_titles(candidates: list) -> list:
 
     for c in candidates:
         norm_t = normalize_persian(c["title"]).lower()
-        # خلاصه بازی‌ها با قانون قطعی باشگاه‌های ایران بررسی می‌شوند
         if is_match_broadcast_footage(norm_t):
             if not is_foreign_or_blacklisted(c["title"], c.get("description", "")):
                 approved.append(c)
@@ -146,7 +174,6 @@ def ai_batch_verify_borderline_titles(candidates: list) -> list:
         if not is_foreign_or_blacklisted(c["title"], c.get("description", "")):
             approved.append(c)
         else:
-            # اگر نام تیم/ستاره خارجی صریح در آن نیست ولی در لیست سفید هم نبود، از هوش مصنوعی بپرس
             has_explicit_foreign = any(normalize_persian(bw).lower() in norm_t for bw in FOREIGN_BLACKLIST)
             if not has_explicit_foreign:
                 borderline.append(c)
@@ -213,7 +240,7 @@ def find_system_chrome() -> str:
     return ""
 
 
-def browser_discover_links(max_pages: int = 8) -> list:
+def browser_discover_links(max_pages: int = 6) -> list:
     discovered_urls = []
     seen = set()
     chrome_path = find_system_chrome()
@@ -264,9 +291,9 @@ def browser_discover_links(max_pages: int = 8) -> list:
             for url in ENTRY_URLS[:max_pages]:
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                    for _ in range(4):
-                        page.evaluate("window.scrollBy(0, 1400)")
-                        page.wait_for_timeout(600)
+                    for _ in range(2):
+                        page.evaluate("window.scrollBy(0, 1000)")
+                        page.wait_for_timeout(500)
 
                     anchors = page.eval_on_selector_all(
                         "a[href*='/video/']",
@@ -291,11 +318,14 @@ def browser_discover_links(max_pages: int = 8) -> list:
     return discovered_urls
 
 
-def extract_video_page_details(page_url: str, session: requests.Session = None) -> dict:
-    m_id = re.search(r"/video/(\d+)", page_url)
-    if not m_id:
+def extract_video_page_details(page_url: str, max_site_id: int = 0, session: requests.Session = None) -> dict:
+    video_id = extract_numeric_id(page_url)
+    if video_id <= 0:
         return None
-    video_id = m_id.group(1)
+
+    # رد فوری ویدیوهای قدیمی قبل از درخواست شبکه
+    if is_video_too_old("", "", video_id=video_id, max_site_id=max_site_id):
+        return None
 
     req = session or requests
     try:
@@ -308,13 +338,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
 
     soup = BeautifulSoup(html, "html.parser")
 
-    related_links = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        rm = re.search(r"/video/(\d+)(?:/[^\s\"\'<>?#]*)?", href)
-        if rm and rm.group(1) != video_id:
-            related_links.append(urljoin("https://footballi.net", rm.group(0)))
-
     title = ""
     og_title = soup.find("meta", property="og:title")
     if og_title and og_title.get("content"):
@@ -322,6 +345,14 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
     if not title and soup.title and soup.title.string:
         title = soup.title.string.strip()
     title = re.sub(r"\s*[-|]\s*فوتبالی.*$", "", title).strip()
+
+    # بررسی تاریخ نسبی داخل بدنه صفحه (مثلاً «۳ هفته پیش» یا «۲ ماه پیش»)
+    for tag in soup.find_all(["aside", "footer", "nav"]):
+        tag.decompose()
+    main_text_sample = soup.get_text(" ", strip=True)[:600]
+    if is_video_too_old(title, main_text_sample, video_id=video_id, max_site_id=max_site_id):
+        print(f"⏳ [SKIP-OLD] Skipping archival/old video ({video_id}): {title}")
+        return None
 
     poster_url = ""
     og_img = soup.find("meta", property="og:image")
@@ -341,8 +372,6 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
             break
 
     if not mp4_url:
-        for tag in soup.find_all(["aside", "footer", "nav"]):
-            tag.decompose()
         video_tag = soup.find("video")
         if video_tag:
             if video_tag.get("src") and ".mp4" in video_tag["src"]:
@@ -379,11 +408,10 @@ def extract_video_page_details(page_url: str, session: requests.Session = None) 
         "description": description or title,
         "mp4_url": mp4_url,
         "poster_url": poster_url,
-        "related_links": related_links[:12],
     }
 
 
-def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
+def crawl_footballi_videos(state: dict, max_new_candidates: int = 20) -> list:
     uploaded_urls = set(state.get("uploaded_urls", []))
     seen_mp4s = set(state.get("seen_mp4s", []))
     queued_urls = {item.get("url") for item in state.get("pending_queue", []) if item.get("url")}
@@ -391,24 +419,13 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
 
     known_ids = set()
     for u in uploaded_urls | queued_urls:
-        m = re.search(r"/video/(\d+)", str(u))
-        if m:
-            known_ids.add(m.group(1))
+        vid_id = extract_numeric_id(u)
+        if vid_id:
+            known_ids.add(vid_id)
 
-    candidate_links = []
-    seen_candidate_ids = set()
-
-    def add_link(u: str):
-        m = re.search(r"/video/(\d+)", u)
-        if not m:
-            return
-        vid_id = m.group(1)
-        if vid_id not in known_ids and vid_id not in seen_candidate_ids:
-            seen_candidate_ids.add(vid_id)
-            candidate_links.append(u)
-
+    raw_discovered_links = []
     for link in browser_discover_links():
-        add_link(link)
+        raw_discovered_links.append(link)
 
     session = requests.Session()
     for hub_url in ENTRY_URLS:
@@ -416,32 +433,47 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             r = session.get(hub_url, headers=HEADERS, timeout=10)
             if r.status_code == 200:
                 for m in re.finditer(r"https?://(?:www\.)?footballi\.net/video/(\d+)(?:/[^\s\"\'<>?#\\]*)?", r.text):
-                    add_link(m.group(0))
+                    raw_discovered_links.append(m.group(0))
                 for m in re.finditer(r"\"/video/(\d+)(?:/[^\s\"\'<>?#\\]*)?\"", r.text):
-                    add_link(urljoin("https://footballi.net", m.group(0).strip('"')))
+                    raw_discovered_links.append(urljoin("https://footballi.net", m.group(0).strip('"')))
         except Exception:
             continue
 
-    print(f"[CRAWLER] Found {len(candidate_links)} fresh candidate video pages to inspect.")
+    # محاسبه بالاترین شماره سریال ویدیوهای روز سایت برای فیلتر کردن ویدیوهای قدیمی
+    all_ids = [extract_numeric_id(u) for u in raw_discovered_links if extract_numeric_id(u) > 0]
+    max_site_id = max(all_ids) if all_ids else MIN_ABSOLUTE_VIDEO_ID
+    state["max_seen_video_id"] = max(int(state.get("max_seen_video_id", 0)), max_site_id)
+    max_site_id = state["max_seen_video_id"]
+
+    candidate_links = []
+    seen_candidate_ids = set()
+
+    # مرتب‌سازی از جدیدترین شماره سریال به قدیم و حذف فوری ویدیوهای بیش از ۴۸ ساعت قبل
+    for u in sorted(raw_discovered_links, key=extract_numeric_id, reverse=True):
+        vid_id = extract_numeric_id(u)
+        if vid_id <= 0 or vid_id in known_ids or vid_id in seen_candidate_ids:
+            continue
+        if is_video_too_old("", "", video_id=vid_id, max_site_id=max_site_id):
+            continue
+        seen_candidate_ids.add(vid_id)
+        candidate_links.append(u)
+
+    print(
+        f"[CRAWLER] Latest site video ID: {max_site_id} | "
+        f"Found {len(candidate_links)} fresh (<48h) candidate video pages to inspect."
+    )
 
     raw_extracted = []
-    idx = 0
-    while idx < len(candidate_links) and len(raw_extracted) < max_new_candidates * 2:
-        link = candidate_links[idx]
-        idx += 1
-
-        details = extract_video_page_details(link, session=session)
+    for link in candidate_links[: max_new_candidates * 2]:
+        details = extract_video_page_details(link, max_site_id=max_site_id, session=session)
         if not details:
             continue
-
-        for rel_url in details.get("related_links", []):
-            if len(candidate_links) < 85:
-                add_link(rel_url)
 
         if details["mp4_url"] in seen_mp4s or details["mp4_url"] in queued_mp4s:
             continue
 
         raw_extracted.append({
+            "video_id": details["video_id"],
             "url": details["url"],
             "title": details["title"],
             "description": details["description"],
@@ -451,14 +483,13 @@ def crawl_footballi_videos(state: dict, max_new_candidates: int = 25) -> list:
             "is_short": False,
         })
 
-    # غربال هوشمند با ترکیب لیست سفید + هوش مصنوعی برای حفظ ۱۰۰٪ مصاحبه‌های ایرانی و حذف بازی‌های خارجی
     verified = ai_batch_verify_borderline_titles(raw_extracted)
     results = []
     for item in verified[:max_new_candidates]:
         seen_mp4s.add(item["mp4_url"])
         results.append(item)
 
-    print(f"[CRAWLER] Verified {len(results)} brand-new strictly domestic Iranian videos from Footballi.net!")
+    print(f"[CRAWLER] Verified {len(results)} brand-new (<48h) domestic Iranian videos!")
     return results
 
 
